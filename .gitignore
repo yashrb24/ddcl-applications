@@ -3,3 +3,5 @@ data/
 outputs/
 *.pt
 .idea/
+__pycache__/
+checkpoints/

@@ -38,7 +38,9 @@ class Decoder(nn.Module):
             nn.ReLU(),
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # 8->16
             nn.ReLU(),
-            nn.ConvTranspose2d(64, out_channels, kernel_size=4, stride=2, padding=1),  # 16->32
+            nn.ConvTranspose2d(
+                64, out_channels, kernel_size=4, stride=2, padding=1
+            ),  # 16->32
         )
 
     def forward(self, x):
@@ -127,29 +129,22 @@ def main():
     batch_size = 128
     epochs = 50
     lr = 3e-4
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # FSQ levels - total codebook size = 8*5*5*5 = 1000
     levels = [8, 5, 5, 5]
 
     # Data transforms
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+    )
 
     # CIFAR-10 datasets
     train_dataset = datasets.CIFAR10(
-        root='./data',
-        train=True,
-        download=True,
-        transform=transform
+        root="./data", train=True, download=True, transform=transform
     )
     val_dataset = datasets.CIFAR10(
-        root='./data',
-        train=False,
-        download=True,
-        transform=transform
+        root="./data", train=False, download=True, transform=transform
     )
 
     train_loader = DataLoader(
@@ -157,14 +152,14 @@ def main():
         batch_size=batch_size,
         shuffle=True,
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=4,
-        pin_memory=True
+        pin_memory=True,
     )
 
     # Model, optimizer
@@ -176,27 +171,33 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Training loop
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
 
     for epoch in range(epochs):
         train_loss = train_epoch(model, train_loader, optimizer, device)
         val_loss = validate(model, val_loader, device)
 
-        print(f"Epoch {epoch + 1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        print(
+            f"Epoch {epoch + 1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}"
+        )
 
         # Visualize reconstructions
-        visualize_reconstructions(model, val_loader, device, epoch + 1, save_dir='outputs')
+        visualize_reconstructions(
+            model, val_loader, device, epoch + 1, save_dir="outputs"
+        )
 
         # Compute codebook usage stats every 5 epochs
         if (epoch + 1) % 5 == 0:
             stats = compute_codebook_usage(model, val_loader, device)
-            print(f"Codebook usage: {stats['unique_codes']}/{stats['total_codes']} "
-                  f"({stats['usage_percent']:.1f}%)")
+            print(
+                f"Codebook usage: {stats['unique_codes']}/{stats['total_codes']} "
+                f"({stats['usage_percent']:.1f}%)"
+            )
 
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), 'fsq_vae_best.pt')
+            torch.save(model.state_dict(), "fsq_vae_best.pt")
             print(f"Saved best model with val loss: {val_loss:.4f}")
 
         print("-" * 70)
