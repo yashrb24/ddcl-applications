@@ -29,7 +29,7 @@ By default, this trains a DDCL-VAE. To switch quantization methods, edit `train.
 QUANTIZER_TYPE = 'fsq'   # or 'ddcl'
 ```
 
-## 📊 Output
+## Output
 
 ### During Training
 - **Visualizations**: 4x4 grids saved to `outputs/` after each epoch
@@ -45,7 +45,7 @@ QUANTIZER_TYPE = 'fsq'   # or 'ddcl'
 - Regularization loss (DDCL only)
 - Codebook usage statistics (FSQ only)
 
-## 🎛️ Configuration
+## ️Configuration
 
 Edit the configuration section in `train.py`:
 
