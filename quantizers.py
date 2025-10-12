@@ -19,28 +19,27 @@ class DDCL_Bottleneck(nn.Module):
         The forward pass for TRAINING, using the reparameterization trick.
         """
         noise = (torch.rand_like(z) - 0.5) * self.delta
-        z_prime = z + noise
-        m = torch.floor(z_prime / self.delta).float() # float because of weights and biases are stored as floats, torch.floor converts them to integers
+        z_q = z + noise
 
         comm_loss = torch.log2((2 * torch.abs(z) / self.delta) + 1).mean()
 
-        return m, None, comm_loss  # Return None for indices to match VQ output
+        return z_q, None, comm_loss  # Return None for indices to match VQ output
 
-    # @torch.no_grad()
-    # def quantize_and_dequantize(self, z):
-    #     """
-    #     The INFERENCE pass. This performs the full, non-differentiable
-    #     quantization and de-quantization round trip.
-    #     """
-    #     # --- Sender Side ---
-    #     noise = (torch.rand_like(z) - 0.5) * self.delta
-    #     z_prime = z + noise
-    #     indices = torch.floor(z_prime / self.delta).long()
+    @torch.no_grad()
+    def quantize_and_dequantize(self, z):
+        """
+        The INFERENCE pass. This performs the full, non-differentiable
+        quantization and de-quantization round trip.
+        """
+        # --- Sender Side ---
+        noise = (torch.rand_like(z) - 0.5) * self.delta
+        z_prime = z + noise
+        indices = torch.floor(z_prime / self.delta).long()
 
-    #     # --- Receiver Side ---
-    #     C_m = self.delta * (indices.float() + 0.5)
-    #     z_q = C_m - noise
-    #     return z_q, indices
+        # --- Receiver Side ---
+        C_m = self.delta * (indices.float() + 0.5)
+        z_q = C_m - noise
+        return z_q, indices
 
 
 class FSQWrapper(nn.Module):
