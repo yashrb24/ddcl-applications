@@ -23,7 +23,7 @@ pip install torch torchvision vector-quantize-pytorch tqdm matplotlib
 python train.py
 ```
 
-By default, this trains a DDCL-VAE. To switch quantization methods, edit `train.py`:
+To switch quantization methods, edit `train.py`:
 
 ```python
 QUANTIZER_TYPE = 'fsq'   # or 'ddcl'

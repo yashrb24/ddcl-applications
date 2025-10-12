@@ -58,7 +58,7 @@ def validate(model, dataloader, device):
 
 def main():
     # ======================== CONFIGURATION ========================
-    QUANTIZER_TYPE = "fsq"  # 'fsq' or 'ddcl'
+    QUANTIZER_TYPE = "ddcl"  # 'fsq' or 'ddcl'
 
     # Training hyperparameters
     batch_size = 64
@@ -71,7 +71,7 @@ def main():
 
     # DDCL settings
     ddcl_delta = 1 / 15  # Quantization grid width
-    ddcl_comm_weight = 1e-3  # Weight for communication loss
+    ddcl_comm_weight = 1e-4  # Weight for communication loss
 
     # Paths
     output_dir = Path(f"outputs")
