@@ -1,9 +1,11 @@
+import argparse
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
 from pathlib import Path
+import wandb
 
 from models import QuantizedVAE
 from utils import visualize_reconstructions, compute_codebook_usage, save_checkpoint
@@ -56,22 +58,47 @@ def validate(model, dataloader, device):
     return total_loss / len(dataloader)
 
 
-def main():
-    # ======================== CONFIGURATION ========================
-    QUANTIZER_TYPE = "fsq"  # 'fsq' or 'ddcl'
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description="Train Quantized VAE")
+
+    # Model configuration
+    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl"],
+                        help="Quantizer type: 'fsq' or 'ddcl'")
 
     # Training hyperparameters
-    batch_size = 64
-    epochs = 50
-    lr = 3e-4
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
+    parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
 
     # FSQ settings
-    fsq_levels = [8, 8, 8, 8]  # Codebook size = 8*8*8*8 = 4096
+    parser.add_argument("--fsq_levels", type=int, nargs="+", default=[8, 8, 8, 8],
+                        help="FSQ levels (codebook size = product of levels)")
 
     # DDCL settings
-    ddcl_delta = 1 / 10  # Quantization grid width
-    ddcl_comm_weight = 1e-4  # Weight for communication loss
+    parser.add_argument("--ddcl_delta", type=float, default=0.1, help="DDCL quantization grid width")
+    parser.add_argument("--ddcl_comm_weight", type=float, default=1e-4,
+                        help="DDCL communication loss weight")
+
+    # Wandb settings
+    parser.add_argument("--use_wandb", action="store_true", help="Enable wandb logging")
+    parser.add_argument("--wandb_project", type=str, default="ddcl-vae", help="Wandb project name")
+
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # ======================== CONFIGURATION ========================
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Initialize wandb if requested
+    if args.use_wandb:
+        wandb.init(project=args.wandb_project, config=vars(args))
+        config = wandb.config
+    else:
+        config = args
 
     # Paths
     output_dir = Path(f"outputs")
@@ -93,35 +120,35 @@ def main():
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,
+        batch_size=config.batch_size,
         shuffle=True,
         num_workers=12,
         pin_memory=True,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,
+        batch_size=config.batch_size,
         shuffle=False,
         num_workers=12,
         pin_memory=True,
     )
 
     # ======================== MODEL SETUP ========================
-    if QUANTIZER_TYPE == "fsq":
-        model = QuantizedVAE(quantizer_type="fsq", levels=fsq_levels).to(device)
+    if config.quantizer_type == "fsq":
+        model = QuantizedVAE(quantizer_type="fsq", levels=config.fsq_levels).to(device)
         print("=" * 70)
         print("Training FSQ-VAE")
         print(f"Codebook size: {model.quantizer.codebook_size}")
         comm_loss_weight = 0.0  # No regularization loss for FSQ
     else:
-        model = QuantizedVAE(quantizer_type="ddcl", delta=ddcl_delta).to(device)
+        model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
         print("=" * 70)
         print("Training DDCL-VAE")
-        print(f"Quantization Delta: {ddcl_delta}")
-        print(f"Communication Loss Weight: {ddcl_comm_weight}")
-        comm_loss_weight = ddcl_comm_weight
+        print(f"Quantization Delta: {config.ddcl_delta}")
+        print(f"Communication Loss Weight: {config.ddcl_comm_weight}")
+        comm_loss_weight = config.ddcl_comm_weight
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
     print(f"Device: {device}")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print("=" * 70)
@@ -129,7 +156,7 @@ def main():
     # ======================== TRAINING LOOP ========================
     best_val_loss = float("inf")
 
-    for epoch in range(epochs):
+    for epoch in range(config.epochs):
         # Train
         train_metrics = train_epoch(
             model, train_loader, optimizer, device, comm_loss_weight
@@ -138,8 +165,18 @@ def main():
         # Validate
         val_loss = validate(model, val_loader, device)
 
+        # Log metrics to wandb
+        if args.use_wandb:
+            wandb.log({
+                "epoch": epoch + 1,
+                "train/total_loss": train_metrics['total_loss'],
+                "train/recon_loss": train_metrics['recon_loss'],
+                "train/reg_loss": train_metrics['reg_loss'],
+                "val/recon_loss": val_loss,
+            })
+
         # Print metrics
-        print(f"\nEpoch {epoch + 1}/{epochs}")
+        print(f"\nEpoch {epoch + 1}/{config.epochs}")
         print(
             f"  Train - Total: {train_metrics['total_loss']:.4f}, "
             f"Recon: {train_metrics['recon_loss']:.4f}, "
@@ -153,12 +190,12 @@ def main():
             val_loader,
             device,
             epoch + 1,
-            quantizer=QUANTIZER_TYPE,
+            quantizer=config.quantizer_type,
             save_dir=output_dir,
         )
 
         # Compute codebook usage (FSQ only)
-        if QUANTIZER_TYPE == "fsq" and (epoch + 1) % 5 == 0:
+        if config.quantizer_type == "fsq" and (epoch + 1) % 5 == 0:
             stats = compute_codebook_usage(model, val_loader, device)
             if stats:
                 print(
@@ -169,14 +206,18 @@ def main():
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_path = checkpoint_dir / f"{QUANTIZER_TYPE}_vae_best.pt"
+            best_path = checkpoint_dir / f"{config.quantizer_type}_vae_best.pt"
             save_checkpoint(model, optimizer, epoch + 1, val_loss, best_path)
             print(f"   New best validation loss: {val_loss:.4f}")
+
+            # Log best model to wandb
+            if args.use_wandb:
+                wandb.log({"best_val_loss": best_val_loss})
 
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
             checkpoint_path = (
-                checkpoint_dir / f"{QUANTIZER_TYPE}_vae_epoch_{epoch+1}.pt"
+                    checkpoint_dir / f"{config.quantizer_type}_vae_epoch_{epoch + 1}.pt"
             )
             save_checkpoint(model, optimizer, epoch + 1, val_loss, checkpoint_path)
 

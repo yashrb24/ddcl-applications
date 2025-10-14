@@ -1,0 +1,30 @@
+program: train.py
+method: grid
+project: ddcl-vae
+
+parameters:
+  quantizer_type:
+    value: ddcl
+  
+  # Grid search over DDCL hyperparameters
+  ddcl_delta:
+    values: [1/5, 1/10/, 1/15, 1/20, 1/25, 1/30]
+  
+  ddcl_comm_weight:
+    values: [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+  
+  # Fixed training parameters
+  batch_size:
+    value: 64
+  
+  epochs:
+    value: 50
+  
+  lr:
+    value: 3e-4
+  
+  use_wandb:
+    value: true
+  
+  wandb_project:
+    value: ddcl-vae

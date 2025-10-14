@@ -39,8 +39,11 @@ class Decoder(nn.Module):
 class QuantizedVAE(nn.Module):
     """Generalized VAE with pluggable quantization methods"""
 
-    def __init__(self, quantizer_type="fsq", levels=[8, 5, 5, 5], delta=0.1):
+    def __init__(self, quantizer_type="fsq", levels=None, delta=0.1):
         super().__init__()
+
+        if levels is None:
+            levels = [8, 5, 5, 5]
         self.quantizer_type = quantizer_type
 
         # Determine latent dimension
