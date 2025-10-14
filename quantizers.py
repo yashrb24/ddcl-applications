@@ -16,7 +16,7 @@ class DDCL_Bottleneck(nn.Module):
 
     def forward(self, z):
         """
-        The forward pass for TRAINING, using the reparameterization trick.
+        The forward pass for TRAINING and INFERENCE
         """
         noise = (torch.rand_like(z) - 0.5) * self.delta
         z_q = z + noise
@@ -28,6 +28,7 @@ class DDCL_Bottleneck(nn.Module):
     @torch.no_grad()
     def quantize_and_dequantize(self, z):
         """
+        Unused as of now
         The INFERENCE pass. This performs the full, non-differentiable
         quantization and de-quantization round trip.
         """
