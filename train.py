@@ -100,8 +100,15 @@ def main():
     else:
         config = args
 
+    # Create run-specific name for organizing outputs during sweeps
+    if config.quantizer_type == "ddcl":
+        run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.ddcl_comm_weight}"
+    else:
+        # For FSQ, could include levels if desired
+        run_name = f"fsq"
+    
     # Paths
-    output_dir = Path(f"outputs")
+    output_dir = Path("outputs")
     checkpoint_dir = Path("checkpoints")
     output_dir.mkdir(exist_ok=True)
     checkpoint_dir.mkdir(exist_ok=True)
@@ -192,6 +199,8 @@ def main():
             epoch + 1,
             quantizer=config.quantizer_type,
             save_dir=output_dir,
+            use_wandb=args.use_wandb,
+            run_name=run_name,
         )
 
         # Compute codebook usage (FSQ only)

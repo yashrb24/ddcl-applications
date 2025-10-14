@@ -8,7 +8,7 @@ parameters:
   
   # Grid search over DDCL hyperparameters
   ddcl_delta:
-    values: [1/5, 1/10/, 1/15, 1/20, 1/25, 1/30]
+    values: [1/5, 1/10, 1/15, 1/20, 1/25, 1/30]
   
   ddcl_comm_weight:
     values: [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]

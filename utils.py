@@ -14,7 +14,7 @@ def denormalize(tensor, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
 
 @torch.no_grad()
 def visualize_reconstructions(
-    model, dataloader, device, epoch, quantizer, save_dir="outputs"
+    model, dataloader, device, epoch, quantizer, save_dir="outputs", use_wandb=False, run_name=None
 ):
     """
     Generate and save a 4x4 grid of original and reconstructed images
@@ -26,11 +26,20 @@ def visualize_reconstructions(
         epoch: Current epoch number
         quantizer: Type of quantizer ('fsq' or 'ddcl')
         save_dir: Directory to save images
+        use_wandb: Whether to log images to wandb
+        run_name: Run-specific name for organizing local files (e.g., 'delta0.1_weight1e-4')
     """
     model.eval()
 
-    # Create directory inside save_dir for the quantizer type
-    Path(save_dir / quantizer).mkdir(parents=True, exist_ok=True)
+    # Create directory structure
+    if run_name:
+        # Parameter-specific folder for sweep runs
+        output_path = Path(save_dir) / run_name
+    else:
+        # Legacy behavior: organize by quantizer type only
+        output_path = Path(save_dir) / quantizer
+    
+    output_path.mkdir(parents=True, exist_ok=True)
 
     # Get a batch of images
     images, _ = next(iter(dataloader))
@@ -72,9 +81,15 @@ def visualize_reconstructions(
 
     plt.tight_layout()
 
-    # Save figure
-    save_path = Path(save_dir / quantizer) / f"reconstruction_epoch_{epoch:03d}.png"
+    # Save figure locally
+    save_path = output_path / f"reconstruction_epoch_{epoch:03d}.png"
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    
+    # Log to wandb if enabled (log every 5 epochs to reduce bandwidth)
+    if use_wandb and epoch % 5 == 0:
+        import wandb
+        wandb.log({f"reconstructions": wandb.Image(str(save_path))}, step=epoch)
+    
     plt.close()
 
     print(f"  → Saved reconstruction grid to {save_path}")
