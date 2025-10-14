@@ -1,7 +1,7 @@
 import torch
-import torchvision.utils as vutils
 import matplotlib.pyplot as plt
 from pathlib import Path
+import wandb
 
 
 def denormalize(tensor, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
@@ -86,9 +86,8 @@ def visualize_reconstructions(
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     
     # Log to wandb if enabled (log every 5 epochs to reduce bandwidth)
-    if use_wandb and epoch % 5 == 0:
-        import wandb
-        wandb.log({f"reconstructions": wandb.Image(str(save_path))}, step=epoch)
+    if use_wandb and epoch % 10 == 0:
+         wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
     
     plt.close()
 

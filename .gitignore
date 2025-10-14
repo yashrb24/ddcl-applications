@@ -5,3 +5,5 @@ outputs/
 .idea/
 __pycache__/
 checkpoints/
+wandb/
+*.out

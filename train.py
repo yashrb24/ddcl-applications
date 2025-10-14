@@ -81,7 +81,8 @@ def parse_args():
                         help="DDCL communication loss weight")
 
     # Wandb settings
-    parser.add_argument("--use_wandb", action="store_true", help="Enable wandb logging")
+    parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
+                      default=True, help="Enable wandb logging")
     parser.add_argument("--wandb_project", type=str, default="ddcl-vae", help="Wandb project name")
 
     return parser.parse_args()
@@ -95,8 +96,10 @@ def main():
 
     # Initialize wandb if requested
     if args.use_wandb:
-        wandb.init(project=args.wandb_project, config=vars(args))
-        config = wandb.config
+      # Check if wandb run already exists (from sweep agent)
+      if wandb.run is None:
+            wandb.init(project=args.wandb_project, config=vars(args))
+            config = wandb.config
     else:
         config = args
 

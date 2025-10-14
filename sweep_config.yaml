@@ -11,7 +11,7 @@ parameters:
     values: [0.2, 0.1, 0.06666667, 0.05, 0.04, 0.03333333]
   
   ddcl_comm_weight:
-    values: [1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+    values: [0.00001, 0.00001, 0.0001, 0.001, 0.01, 0.1]
   
   # Fixed training parameters
   batch_size:
@@ -21,10 +21,4 @@ parameters:
     value: 50
   
   lr:
-    value: 3e-4
-  
-  use_wandb:
-    value: true
-  
-  wandb_project:
-    value: ddcl-vae
+    value: 0.0003
