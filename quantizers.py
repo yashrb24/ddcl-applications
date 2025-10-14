@@ -48,7 +48,7 @@ class FSQWrapper(nn.Module):
 
     def __init__(self, levels):
         super().__init__()
-        self.fsq = FSQ(levels=levels)
+        self.fsq = FSQ(levels=levels, channel_first=True)
         self.codebook_size = torch.prod(torch.tensor(levels)).item()
 
     def forward(self, z):

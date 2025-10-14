@@ -65,12 +65,10 @@ class QuantizedVAE(nn.Module):
     def forward(self, x):
         """Forward pass through encoder -> quantizer -> decoder"""
         z = self.encoder(x)
-        z = z.permute(0, 2, 3, 1)  # (B, C, H, W) -> (B, H, W, C)
 
         # Quantize (returns z_q, indices, reg_loss)
         z_q, indices, reg_loss = self.quantizer(z)
 
-        z_q = z_q.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
         recon = self.decoder(z_q)
 
         return recon, indices, reg_loss
