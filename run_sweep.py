@@ -68,6 +68,7 @@ def main():
     # Create or use existing sweep
     if args.sweep_id:
         sweep_id = args.sweep_id
+        sweep_path = args.sweep_id
         print(f"Using existing sweep: {sweep_id}")
     else:
         # Load sweep configuration
@@ -76,10 +77,16 @@ def main():
         
         # Initialize sweep
         sweep_id = wandb.sweep(sweep_config, project="ddcl-vae")
+        
+        # Get entity (username) for full sweep path
+        entity = wandb.Api().default_entity
+        sweep_path = f"{entity}/ddcl-vae/{sweep_id}"
+        
         print(f"Created new sweep with ID: {sweep_id}")
+        print(f"Full sweep path: {sweep_path}")
     
-    print(f"\nTo run agents manually (supports multiple parallel agents):")
-    print(f"  wandb agent {sweep_id}")
+    print(f"To run agents manually (supports multiple parallel agents):")
+    print(f"  wandb agent {sweep_path}")
     print(f"\nFor parallel execution, run the above command in multiple terminals/tmux/screen sessions")
     
     if args.create_only:
@@ -87,13 +94,13 @@ def main():
         sys.exit(0)
     
     # Run the sweep agent
-    print(f"\nStarting sweep agent...")
+    print(f"Starting sweep agent...")
     if args.count:
         print(f"  Running {args.count} sweep jobs")
-        wandb.agent(sweep_id, count=args.count)
+        wandb.agent(sweep_path)
     else:
-        print(f"  Running all sweep jobs (9 total for current grid)")
-        wandb.agent(sweep_id)
+        print(f"  Running all sweep jobs (30 total for current grid)")
+        wandb.agent(sweep_path)
 
 
 if __name__ == "__main__":
