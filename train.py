@@ -82,7 +82,7 @@ def parse_args():
 
     # Wandb settings
     parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
-                      default=True, help="Enable wandb logging")
+                      default=False, help="Enable wandb logging")
     parser.add_argument("--wandb_project", type=str, default="ddcl-vae", help="Wandb project name")
 
     return parser.parse_args()
