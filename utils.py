@@ -14,7 +14,7 @@ def denormalize(tensor, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
 
 @torch.no_grad()
 def visualize_reconstructions(
-    model, dataloader, device, epoch, quantizer, save_dir="outputs", use_wandb=False, run_name=None
+        model, dataloader, device, epoch, quantizer, save_dir="outputs", use_wandb=False, run_name=None
 ):
     """
     Generate and save a 4x4 grid of original and reconstructed images
@@ -38,7 +38,7 @@ def visualize_reconstructions(
     else:
         # Legacy behavior: organize by quantizer type only
         output_path = Path(save_dir) / quantizer
-    
+
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Get a batch of images
@@ -84,11 +84,85 @@ def visualize_reconstructions(
     # Save figure locally
     save_path = output_path / f"reconstruction_epoch_{epoch:03d}.png"
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    
+
     # Log to wandb if enabled (log every 5 epochs to reduce bandwidth)
     if use_wandb and epoch % 10 == 0:
-         wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
-    
+        wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
+
+    plt.close()
+
+    print(f"  → Saved reconstruction grid to {save_path}")
+
+
+@torch.no_grad()
+def visualize_reconstructions_new_arch(
+        model, dataloader, device, epoch, quantizer, save_dir="outputs", use_wandb=False, run_name=None
+):
+    """
+    Generate and save a 4x4 grid of original and reconstructed images
+
+    Args:
+        model: Quantized VAE model
+        dataloader: DataLoader to sample images from
+        device: Device to run model on
+        epoch: Current epoch number
+        quantizer: Type of quantizer ('fsq' or 'ddcl')
+        save_dir: Directory to save images
+        use_wandb: Whether to log images to wandb
+        run_name: Run-specific name for organizing local files (e.g., 'delta0.1_weight1e-4')
+    """
+    model.eval()
+
+    # Create directory structure
+    if run_name:
+        # Parameter-specific folder for sweep runs
+        output_path = Path(save_dir) / run_name
+    else:
+        # Legacy behavior: organize by quantizer type only
+        output_path = Path(save_dir) / quantizer
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Get a batch of images
+    images, _ = next(iter(dataloader))
+    images = images[:8].to(device)  # Take 8 images for 4x4 grid
+
+    # Get reconstructions
+    reconstructions, _, _ = model(images)
+
+    # Create figure with original and reconstructed images
+    fig, axes = plt.subplots(4, 4, figsize=(10, 10))
+    fig.suptitle(
+        f"Epoch {epoch} - Top 2 rows: Original, Bottom 2 rows: Reconstructed",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    # Plot images in 4x4 grid
+    for idx in range(8):
+        row = idx // 4
+        col = idx % 4
+
+        # Original images (top 2 rows)
+        img = images[idx].permute(1, 2, 0).numpy()
+        axes[row, col].imshow(img)
+        axes[row, col].axis("off")
+
+        # Reconstructed images (bottom 2 rows)
+        recon = reconstructions[idx].permute(1, 2, 0).numpy()
+        axes[row + 2, col].imshow(recon)
+        axes[row + 2, col].axis("off")
+
+    plt.tight_layout()
+
+    # Save figure locally
+    save_path = output_path / f"reconstruction_epoch_{epoch:03d}.png"
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    # Log to wandb if enabled (log every 5 epochs to reduce bandwidth)
+    if use_wandb and epoch % 10 == 0:
+        wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
+
     plt.close()
 
     print(f"  → Saved reconstruction grid to {save_path}")

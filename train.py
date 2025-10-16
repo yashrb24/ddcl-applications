@@ -1,17 +1,19 @@
 import argparse
+from pathlib import Path
+
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from tqdm import tqdm
-from pathlib import Path
+
 import wandb
-
 from models import QuantizedVAE
-from utils import visualize_reconstructions, compute_codebook_usage, save_checkpoint
+from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
 
-def train_epoch(model, dataloader, optimizer, device, comm_loss_weight=0.01):
+def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight=0.01):
     """Train for one epoch"""
     model.train()
     total_loss = 0
@@ -24,10 +26,10 @@ def train_epoch(model, dataloader, optimizer, device, comm_loss_weight=0.01):
 
         recon, _, reg_loss = model(data)
 
-        recon_loss = F.mse_loss(recon, data)
+        recon_loss = criterion(recon, data)
 
         # Add regularization loss (weighted)
-        total_batch_loss = recon_loss + comm_loss_weight * reg_loss
+        total_batch_loss = recon_loss + reg_loss_weight * reg_loss
 
         total_batch_loss.backward()
         optimizer.step()
@@ -67,9 +69,9 @@ def parse_args():
                         help="Quantizer type: 'fsq' or 'ddcl'")
 
     # Training hyperparameters
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     # FSQ settings
     parser.add_argument("--fsq_levels", type=int, nargs="+", default=[8, 8, 8, 8],
@@ -82,7 +84,7 @@ def parse_args():
 
     # Wandb settings
     parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
-                      default=False, help="Enable wandb logging")
+                        default=False, help="Enable wandb logging")
     parser.add_argument("--wandb_project", type=str, default="ddcl-vae", help="Wandb project name")
 
     return parser.parse_args()
@@ -96,8 +98,8 @@ def main():
 
     # Initialize wandb if requested
     if args.use_wandb:
-      # Check if wandb run already exists (from sweep agent)
-      if wandb.run is None:
+        # Check if wandb run already exists (from sweep agent)
+        if wandb.run is None:
             wandb.init(project=args.wandb_project, config=vars(args))
             config = wandb.config
     else:
@@ -109,7 +111,7 @@ def main():
     else:
         # For FSQ, could include levels if desired
         run_name = f"fsq"
-    
+
     # Paths
     output_dir = Path("outputs")
     checkpoint_dir = Path("checkpoints")
@@ -118,7 +120,7 @@ def main():
 
     # ======================== DATA LOADING ========================
     transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        [transforms.ToTensor()]
     )
 
     train_dataset = datasets.CIFAR10(
@@ -132,15 +134,15 @@ def main():
         train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
-        num_workers=12,
-        pin_memory=True,
+        num_workers=0,
+        pin_memory=False,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.batch_size,
         shuffle=False,
-        num_workers=12,
-        pin_memory=True,
+        num_workers=0,
+        pin_memory=False,
     )
 
     # ======================== MODEL SETUP ========================
@@ -149,16 +151,17 @@ def main():
         print("=" * 70)
         print("Training FSQ-VAE")
         print(f"Codebook size: {model.quantizer.codebook_size}")
-        comm_loss_weight = 0.0  # No regularization loss for FSQ
+        reg_loss_weight = 0.0  # No regularization loss for FSQ
     else:
         model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
         print("=" * 70)
         print("Training DDCL-VAE")
         print(f"Quantization Delta: {config.ddcl_delta}")
         print(f"Communication Loss Weight: {config.ddcl_comm_weight}")
-        comm_loss_weight = config.ddcl_comm_weight
+        reg_loss_weight = config.ddcl_comm_weight
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    criterion = nn.BCELoss()
     print(f"Device: {device}")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print("=" * 70)
@@ -169,7 +172,7 @@ def main():
     for epoch in range(config.epochs):
         # Train
         train_metrics = train_epoch(
-            model, train_loader, optimizer, device, comm_loss_weight
+            model, train_loader, optimizer, criterion, device, reg_loss_weight
         )
 
         # Validate
@@ -195,7 +198,7 @@ def main():
         print(f"  Val Recon Loss: {val_loss:.4f}")
 
         # Visualize reconstructions
-        visualize_reconstructions(
+        visualize_reconstructions_new_arch(
             model,
             val_loader,
             device,

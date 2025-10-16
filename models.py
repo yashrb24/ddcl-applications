@@ -8,11 +8,13 @@ class Encoder(nn.Module):
     def __init__(self, in_channels=3, latent_dim=4):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 12, 4, stride=2, padding=1),            # [batch, 12, 16, 16]
+            nn.Conv2d(in_channels, 12, 4, stride=2, padding=1),  # [batch, 12, 16, 16]
             nn.ReLU(),
-            nn.Conv2d(12, 24, 4, stride=2, padding=1),           # [batch, 24, 8, 8]
+            nn.Conv2d(12, 24, 4, stride=2, padding=1),  # [batch, 24, 8, 8]
             nn.ReLU(),
-			nn.Conv2d(24, 48, 4, stride=2, padding=1),           # [batch, 48, 4, 4]
+            nn.Conv2d(24, 48, 4, stride=2, padding=1),  # [batch, 48, 4, 4]
+            nn.Flatten(),
+            nn.Linear(48 * 4 * 4, latent_dim),
         )
 
     def forward(self, x):
@@ -25,11 +27,14 @@ class Decoder(nn.Module):
     def __init__(self, latent_dim=4, out_channels=3):
         super().__init__()
         self.decoder = nn.Sequential(
-			nn.ConvTranspose2d(48, 24, 4, stride=2, padding=1),  # [batch, 24, 8, 8]
+            nn.Linear(latent_dim, 48 * 4 * 4),
+            nn.Unflatten(dim=1, unflattened_size=(48, 4, 4)),
+            nn.ConvTranspose2d(48, 24, 4, stride=2, padding=1),  # [batch, 24, 8, 8]
             nn.ReLU(),
-			nn.ConvTranspose2d(24, 12, 4, stride=2, padding=1),  # [batch, 12, 16, 16]
+            nn.ConvTranspose2d(24, 12, 4, stride=2, padding=1),  # [batch, 12, 16, 16]
             nn.ReLU(),
-            nn.ConvTranspose2d(12, out_channels, 4, stride=2, padding=1),   # [batch, 3, 32, 32]
+            nn.ConvTranspose2d(12, out_channels, 4, stride=2, padding=1),  # [batch, 3, 32, 32]
+            nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -42,12 +47,12 @@ class QuantizedVAE(nn.Module):
     def __init__(self, quantizer_type="fsq", levels=None, delta=0.1):
         super().__init__()
 
-        if levels is None:
-            levels = [8, 5, 5, 5]
         self.quantizer_type = quantizer_type
 
         # Determine latent dimension
         if quantizer_type == "fsq":
+            if levels is None:
+                levels = [8, 5, 5, 5]
             latent_dim = len(levels)
         elif quantizer_type == "ddcl":
             latent_dim = 4  # Fixed for DDCL, can be made configurable
@@ -75,12 +80,3 @@ class QuantizedVAE(nn.Module):
         recon = self.decoder(z_q)
 
         return recon, indices, reg_loss
-
-    def encode(self, x):
-        """Encode image to discrete indices"""
-        z = self.encoder(x).permute(0, 2, 3, 1)
-        if self.quantizer_type == "fsq":
-            _, indices, _ = self.quantizer(z)
-        else:  # ddcl
-            _, indices = self.quantizer.quantize_and_dequantize(z)
-        return indices
