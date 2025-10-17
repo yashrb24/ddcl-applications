@@ -1,5 +1,5 @@
 import torch.nn as nn
-from quantizers import FSQWrapper, DDCL_Bottleneck
+from quantizers import FSQWrapper, DDCL_Bottleneck, VanillaVAE
 
 
 class Encoder(nn.Module):
@@ -44,7 +44,7 @@ class Decoder(nn.Module):
 class QuantizedVAE(nn.Module):
     """Generalized VAE with pluggable quantization methods"""
 
-    def __init__(self, quantizer_type="fsq", levels=None, delta=0.1):
+    def __init__(self, quantizer_type="fsq", levels=None, delta=0.1, latent_dim=4):
         super().__init__()
 
         self.quantizer_type = quantizer_type
@@ -54,19 +54,29 @@ class QuantizedVAE(nn.Module):
             if levels is None:
                 levels = [8, 5, 5, 5]
             latent_dim = len(levels)
+            encoder_latent_dim = latent_dim
+            decoder_latent_dim = latent_dim
         elif quantizer_type == "ddcl":
-            latent_dim = 4  # Fixed for DDCL, can be made configurable
+            # latent_dim is taken from parameter (default 4)
+            encoder_latent_dim = latent_dim
+            decoder_latent_dim = latent_dim
+        elif quantizer_type == "vae":
+            # VAE needs 2*latent_dim from encoder (mu + logvar)
+            encoder_latent_dim = 2 * latent_dim
+            decoder_latent_dim = latent_dim
         else:
             raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
 
-        self.encoder = Encoder(latent_dim=latent_dim)
-        self.decoder = Decoder(latent_dim=latent_dim)
+        self.encoder = Encoder(latent_dim=encoder_latent_dim)
+        self.decoder = Decoder(latent_dim=decoder_latent_dim)
 
         # Initialize quantizer
         if quantizer_type == "fsq":
             self.quantizer = FSQWrapper(levels=levels)
         elif quantizer_type == "ddcl":
             self.quantizer = DDCL_Bottleneck(delta=delta, latent_dim=latent_dim)
+        elif quantizer_type == "vae":
+            self.quantizer = VanillaVAE(latent_dim=latent_dim)
         else:
             raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
 

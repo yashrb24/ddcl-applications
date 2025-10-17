@@ -65,8 +65,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Quantized VAE")
 
     # Model configuration
-    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl"],
-                        help="Quantizer type: 'fsq' or 'ddcl'")
+    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl", "vae"],
+                        help="Quantizer type: 'fsq' or 'ddcl' or 'vae' ")
 
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
@@ -79,8 +79,8 @@ def parse_args():
 
     # DDCL settings
     parser.add_argument("--ddcl_delta", type=float, default=0.1, help="DDCL quantization grid width")
-    parser.add_argument("--ddcl_comm_weight", type=float, default=1e-4,
-                        help="DDCL communication loss weight")
+    parser.add_argument("--reg_loss_weight", type=float, default=1e-4,
+                        help="regularization loss weight, KL loss weight for VAE and communication loss weight for DDCL")
 
     # Wandb settings
     parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
@@ -97,6 +97,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize wandb if requested
+    config = None
     if args.use_wandb:
         # Check if wandb run already exists (from sweep agent)
         if wandb.run is None:
@@ -107,9 +108,10 @@ def main():
 
     # Create run-specific name for organizing outputs during sweeps
     if config.quantizer_type == "ddcl":
-        run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.ddcl_comm_weight}"
+        run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.reg_loss_weight}"
+    elif config.quantizer_type == "vae":
+        run_name = f"vae"
     else:
-        # For FSQ, could include levels if desired
         run_name = f"fsq"
 
     # Paths
@@ -152,13 +154,18 @@ def main():
         print("Training FSQ-VAE")
         print(f"Codebook size: {model.quantizer.codebook_size}")
         reg_loss_weight = 0.0  # No regularization loss for FSQ
+    elif config.quantizer_type == "vae":
+        model = QuantizedVAE(quantizer_type="vae").to(device)
+        print("=" * 70)
+        print("Training Vanilla VAE")
+        reg_loss_weight = config.reg_loss_weight
     else:
         model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
         print("=" * 70)
         print("Training DDCL-VAE")
         print(f"Quantization Delta: {config.ddcl_delta}")
-        print(f"Communication Loss Weight: {config.ddcl_comm_weight}")
-        reg_loss_weight = config.ddcl_comm_weight
+        print(f"Communication Loss Weight: {config.reg_loss_weight}")
+        reg_loss_weight = config.reg_loss_weight
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     criterion = nn.BCELoss()
