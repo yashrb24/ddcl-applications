@@ -1,5 +1,5 @@
 import torch.nn as nn
-from quantizers import FSQWrapper, DDCL_Bottleneck, VanillaVAE
+from quantizers import FSQWrapper, DDCL_Bottleneck, VanillaVAE, VQVAEWrapper
 
 
 class Encoder(nn.Module):
@@ -44,28 +44,33 @@ class Decoder(nn.Module):
 class QuantizedVAE(nn.Module):
     """Generalized VAE with pluggable quantization methods"""
 
-    def __init__(self, quantizer_type="fsq", levels=None, delta=0.1, latent_dim=4):
+    def __init__(self, quantizer_type="fsq", levels=None, delta=None, codebook_size=None, latent_dim=4):
         super().__init__()
 
         self.quantizer_type = quantizer_type
 
         # Determine latent dimension
-        if quantizer_type == "fsq":
-            if levels is None:
-                levels = [8, 5, 5, 5]
-            latent_dim = len(levels)
-            encoder_latent_dim = latent_dim
-            decoder_latent_dim = latent_dim
-        elif quantizer_type == "ddcl":
-            # latent_dim is taken from parameter (default 4)
-            encoder_latent_dim = latent_dim
-            decoder_latent_dim = latent_dim
-        elif quantizer_type == "vae":
-            # VAE needs 2*latent_dim from encoder (mu + logvar)
-            encoder_latent_dim = 2 * latent_dim
-            decoder_latent_dim = latent_dim
-        else:
-            raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
+        encoder_latent_dim = None
+        decoder_latent_dim = None
+
+        match quantizer_type:
+            case "fsq":
+                if levels is None:
+                    levels = [8, 5, 5, 5]
+                latent_dim = len(levels)
+                encoder_latent_dim = latent_dim
+                decoder_latent_dim = latent_dim
+            case "ddcl":
+                encoder_latent_dim = latent_dim
+                decoder_latent_dim = latent_dim
+            case "vae":
+                encoder_latent_dim = 2 * latent_dim
+                decoder_latent_dim = latent_dim
+            case "vq_vae":
+                encoder_latent_dim = latent_dim
+                decoder_latent_dim = latent_dim
+            case _:
+                raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
 
         self.encoder = Encoder(latent_dim=encoder_latent_dim)
         self.decoder = Decoder(latent_dim=decoder_latent_dim)
@@ -77,6 +82,8 @@ class QuantizedVAE(nn.Module):
             self.quantizer = DDCL_Bottleneck(delta=delta, latent_dim=latent_dim)
         elif quantizer_type == "vae":
             self.quantizer = VanillaVAE(latent_dim=latent_dim)
+        elif quantizer_type == "vq_vae":
+            self.quantizer = VQVAEWrapper(latent_dim=latent_dim, codebook_size=codebook_size)
         else:
             raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
 

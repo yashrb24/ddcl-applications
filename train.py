@@ -65,8 +65,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Quantized VAE")
 
     # Model configuration
-    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl", "vae"],
-                        help="Quantizer type: 'fsq' or 'ddcl' or 'vae' ")
+    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl", "vae", "vq_vae"],
+                        help="Quantizer type: 'fsq' or 'ddcl' or 'vae' or 'vq_vae'")
 
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
@@ -80,7 +80,10 @@ def parse_args():
     # DDCL settings
     parser.add_argument("--ddcl_delta", type=float, default=0.1, help="DDCL quantization grid width")
     parser.add_argument("--reg_loss_weight", type=float, default=1e-4,
-                        help="regularization loss weight, KL loss weight for VAE and communication loss weight for DDCL")
+                        help="regularization loss weight, KL loss weight for VAE, commitment loss for vqvae, communication loss weight for DDCL")
+
+    # VQ-VAE settings
+    parser.add_argument("--codebook_size", type=int, default=128, help="VQ-VAE codebook size")
 
     # Wandb settings
     parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
@@ -106,13 +109,19 @@ def main():
     else:
         config = args
 
-    # Create run-specific name for organizing outputs during sweeps
-    if config.quantizer_type == "ddcl":
-        run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.reg_loss_weight}"
-    elif config.quantizer_type == "vae":
-        run_name = f"vae"
-    else:
-        run_name = f"fsq"
+    # Create a run-specific name for organizing outputs during sweeps
+    run_name = None
+    match config.quantizer_type:
+        case "fsq":
+            run_name = f"fsq_levels{config.fsq_levels}"
+        case "ddcl":
+            run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.reg_loss_weight}"
+        case "vae":
+            run_name = f"vae"
+        case "vq_vae":
+            run_name = f"vq_vae"
+        case _:
+            raise ValueError(f"Unknown quantizer_type: {config.quantizer_type}")
 
     # Paths
     output_dir = Path("outputs")
@@ -148,24 +157,38 @@ def main():
     )
 
     # ======================== MODEL SETUP ========================
-    if config.quantizer_type == "fsq":
-        model = QuantizedVAE(quantizer_type="fsq", levels=config.fsq_levels).to(device)
-        print("=" * 70)
-        print("Training FSQ-VAE")
-        print(f"Codebook size: {model.quantizer.codebook_size}")
-        reg_loss_weight = 0.0  # No regularization loss for FSQ
-    elif config.quantizer_type == "vae":
-        model = QuantizedVAE(quantizer_type="vae").to(device)
-        print("=" * 70)
-        print("Training Vanilla VAE")
-        reg_loss_weight = config.reg_loss_weight
-    else:
-        model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
-        print("=" * 70)
-        print("Training DDCL-VAE")
-        print(f"Quantization Delta: {config.ddcl_delta}")
-        print(f"Communication Loss Weight: {config.reg_loss_weight}")
-        reg_loss_weight = config.reg_loss_weight
+    model = None
+    reg_loss_weight = None
+    match config.quantizer_type:
+        case "fsq":
+            model = QuantizedVAE(quantizer_type="fsq", levels=config.fsq_levels).to(device)
+            print("=" * 70)
+            print("Training FSQ-VAE")
+            print(f"Codebook size: {model.quantizer.codebook_size}")
+            reg_loss_weight = 0.0  # No regularization loss for FSQ
+
+        case "vae":
+            model = QuantizedVAE(quantizer_type="vae").to(device)
+            print("=" * 70)
+            print("Training Vanilla VAE")
+            reg_loss_weight = config.reg_loss_weight
+
+        case "vq_vae":
+            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=config.codebook_size).to(device)
+            print("=" * 70)
+            print("Training VQ-VAE")
+            reg_loss_weight = config.reg_loss_weight
+
+        case "ddcl":
+            model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
+            print("=" * 70)
+            print("Training DDCL-VAE")
+            print(f"Quantization Delta: {config.ddcl_delta}")
+            print(f"Communication Loss Weight: {config.reg_loss_weight}")
+            reg_loss_weight = config.reg_loss_weight
+
+        case _:
+            raise ValueError(f"Unknown quantizer_type: {config.quantizer_type}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     criterion = nn.BCELoss()
@@ -236,7 +259,7 @@ def main():
             if args.use_wandb:
                 wandb.log({"best_val_loss": best_val_loss})
 
-        # Save checkpoint every 10 epochs
+        # Save a checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
             checkpoint_path = (
                     checkpoint_dir / f"{config.quantizer_type}_vae_epoch_{epoch + 1}.pt"

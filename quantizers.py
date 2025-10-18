@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from vector_quantize_pytorch import FSQ
+from vector_quantize_pytorch import FSQ, VectorQuantize
 
 
 class DDCL_Bottleneck(nn.Module):
@@ -75,3 +75,15 @@ class VanillaVAE(nn.Module):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
 
         return z_sampled, None, kl_loss
+
+
+class VQVAEWrapper(nn.Module):
+    def __init__(self, codebook_size, latent_dim=4):
+        super().__init__()
+        self.codebook_size = codebook_size
+        self.latent_dim = latent_dim
+        self.vq = VectorQuantize(dim=latent_dim, codebook_size=codebook_size)
+
+    def forward(self, z):
+        z_q, indices, commitment_loss = self.vq(z)
+        return z_q, indices, commitment_loss
