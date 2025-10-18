@@ -87,3 +87,14 @@ class VQVAEWrapper(nn.Module):
     def forward(self, z):
         z_q, indices, commitment_loss = self.vq(z)
         return z_q, indices, commitment_loss
+
+
+class AEWrapper(nn.Module):
+    """A fake quantizer that does nothing, for implementing a vanilla autoencoder"""
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # No quantization
+        return x, None, 0.0

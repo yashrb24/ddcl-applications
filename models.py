@@ -1,5 +1,5 @@
 import torch.nn as nn
-from quantizers import FSQWrapper, DDCL_Bottleneck, VanillaVAE, VQVAEWrapper
+from quantizers import FSQWrapper, DDCL_Bottleneck, VanillaVAE, VQVAEWrapper, AEWrapper
 
 
 class Encoder(nn.Module):
@@ -69,6 +69,9 @@ class QuantizedVAE(nn.Module):
             case "vq_vae":
                 encoder_latent_dim = latent_dim
                 decoder_latent_dim = latent_dim
+            case "autoencoder":
+                encoder_latent_dim = latent_dim
+                decoder_latent_dim = latent_dim
             case _:
                 raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
 
@@ -84,6 +87,8 @@ class QuantizedVAE(nn.Module):
             self.quantizer = VanillaVAE(latent_dim=latent_dim)
         elif quantizer_type == "vq_vae":
             self.quantizer = VQVAEWrapper(latent_dim=latent_dim, codebook_size=codebook_size)
+        elif quantizer_type == "autoencoder":
+            self.quantizer = AEWrapper()
         else:
             raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
 

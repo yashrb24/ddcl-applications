@@ -65,8 +65,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Quantized VAE")
 
     # Model configuration
-    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl", "vae", "vq_vae"],
-                        help="Quantizer type: 'fsq' or 'ddcl' or 'vae' or 'vq_vae'")
+    parser.add_argument("--quantizer_type", type=str, default="fsq",
+                        choices=["fsq", "ddcl", "vae", "vq_vae", "autoencoder"],
+                        help="Quantizer type: 'fsq' or 'ddcl' or 'vae' or 'vq_vae' or 'autoencoder'")
 
     # Training hyperparameters
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
@@ -120,6 +121,8 @@ def main():
             run_name = f"vae"
         case "vq_vae":
             run_name = f"vq_vae"
+        case "autoencoder":
+            run_name = f"autoencoder"
         case _:
             raise ValueError(f"Unknown quantizer_type: {config.quantizer_type}")
 
@@ -187,8 +190,11 @@ def main():
             print(f"Communication Loss Weight: {config.reg_loss_weight}")
             reg_loss_weight = config.reg_loss_weight
 
-        case _:
-            raise ValueError(f"Unknown quantizer_type: {config.quantizer_type}")
+        case "autoencoder":
+            model = QuantizedVAE(quantizer_type="autoencoder").to(device)
+            print("=" * 70)
+            print("Training Autoencoder")
+            reg_loss_weight = 0.0
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     criterion = nn.BCELoss()
@@ -240,7 +246,7 @@ def main():
         )
 
         # Compute codebook usage (FSQ only)
-        if config.quantizer_type == "fsq" and (epoch + 1) % 5 == 0:
+        if config.quantizer_type == "fsq":
             stats = compute_codebook_usage(model, val_loader, device)
             if stats:
                 print(
