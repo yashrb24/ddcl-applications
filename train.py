@@ -86,6 +86,10 @@ def parse_args():
     # VQ-VAE settings
     parser.add_argument("--codebook_size", type=int, default=128, help="VQ-VAE codebook size")
 
+    # General quantizer settings
+    parser.add_argument("--latent_dim", type=int, default=4,
+                        help="Latent space dimensionality (used for all quantizers except FSQ)")
+
     # Wandb settings
     parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
                         default=False, help="Enable wandb logging")
@@ -171,19 +175,19 @@ def main():
             reg_loss_weight = 0.0  # No regularization loss for FSQ
 
         case "vae":
-            model = QuantizedVAE(quantizer_type="vae").to(device)
+            model = QuantizedVAE(quantizer_type="vae", latent_dim=config.latent_dim).to(device)
             print("=" * 70)
             print("Training Vanilla VAE")
             reg_loss_weight = config.reg_loss_weight
 
         case "vq_vae":
-            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=config.codebook_size).to(device)
+            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=config.codebook_size, latent_dim=config.latent_dim).to(device)
             print("=" * 70)
             print("Training VQ-VAE")
             reg_loss_weight = config.reg_loss_weight
 
         case "ddcl":
-            model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
+            model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta, latent_dim=config.latent_dim).to(device)
             print("=" * 70)
             print("Training DDCL-VAE")
             print(f"Quantization Delta: {config.ddcl_delta}")
@@ -191,7 +195,7 @@ def main():
             reg_loss_weight = config.reg_loss_weight
 
         case "autoencoder":
-            model = QuantizedVAE(quantizer_type="autoencoder").to(device)
+            model = QuantizedVAE(quantizer_type="autoencoder", latent_dim=config.latent_dim).to(device)
             print("=" * 70)
             print("Training Autoencoder")
             reg_loss_weight = 0.0

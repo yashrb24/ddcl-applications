@@ -14,14 +14,14 @@
 ### Installation
 
 ```bash
-pip install torch torchvision vector-quantize-pytorch tqdm matplotlib
+pip install torch torchvision vector-quantize-pytorch tqdm matplotlib ipdb
 ```
 
 ### Training
 
 **Basic usage**:
 ```bash
-python train.py --quantizer_type fsq  # Options: fsq, ddcl, vae, vq_vae
+python train.py --quantizer_type fsq  # Options: fsq, ddcl, vae, vq_vae, autoencoder
 ```
 
 **Examples**:
@@ -37,6 +37,9 @@ python train.py --quantizer_type vae --reg_loss_weight 1e-4
 
 # VQ-VAE with codebook
 python train.py --quantizer_type vq_vae --codebook_size 128 --reg_loss_weight 1e-4
+
+# Vanilla Autoencoder (no quantization)
+python train.py --quantizer_type autoencoder --latent_dim 8
 
 # With WandB logging
 python train.py --quantizer_type fsq --use_wandb true --wandb_project my-project
@@ -76,6 +79,9 @@ python train.py --quantizer_type fsq --use_wandb true --wandb_project my-project
 # VQ-VAE specific
 --codebook_size 128                      # Codebook size
 
+# General quantizer settings
+--latent_dim 4                           # Latent space dimensionality (non-FSQ only)
+
 # VAE/VQ-VAE/DDCL
 --reg_loss_weight 1e-4                   # KL (VAE), commitment (VQ-VAE), communication (DDCL)
 
@@ -92,6 +98,7 @@ Quantization implementations:
 - `DDCL_Bottleneck`: DDCL quantization
 - `VanillaVAE`: Gaussian VAE with KL divergence
 - `VQVAEQuantizer`: Vector quantization with codebook
+- `AEWrapper`: Vanilla Autoencoder (no quantization) with passthrough
 
 ### `models.py`
 Contains network architectures:
