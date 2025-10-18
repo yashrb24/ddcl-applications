@@ -1,10 +1,10 @@
-## 📁 Project Structure
+## Project Structure
 
 ```
 .
 ├── train.py           # Main training script
 ├── models.py          # VAE architecture (Encoder, Decoder, QuantizedVAE)
-├── quantizers.py      # Quantization methods (FSQ, DDCL)
+├── quantizers.py      # Quantization methods (FSQ, DDCL, VAE, VQ-VAE)
 ├── utils.py           # Visualization and utilities
 ├── outputs/           # Generated visualizations (created automatically)
 ├── checkpoints/       # Saved model checkpoints (created automatically)
@@ -19,14 +19,27 @@ pip install torch torchvision vector-quantize-pytorch tqdm matplotlib
 
 ### Training
 
+**Basic usage**:
 ```bash
-python train.py
+python train.py --quantizer_type fsq  # Options: fsq, ddcl, vae, vq_vae
 ```
 
-To switch quantization methods, edit `train.py`:
+**Examples**:
+```bash
+# FSQ with custom levels
+python train.py --quantizer_type fsq --fsq_levels 8 8 8 8
 
-```python
-QUANTIZER_TYPE = 'fsq'   # or 'ddcl'
+# DDCL with custom delta
+python train.py --quantizer_type ddcl --ddcl_delta 0.1 --reg_loss_weight 1e-4
+
+# Vanilla VAE
+python train.py --quantizer_type vae --reg_loss_weight 1e-4
+
+# VQ-VAE with codebook
+python train.py --quantizer_type vq_vae --codebook_size 128 --reg_loss_weight 1e-4
+
+# With WandB logging
+python train.py --quantizer_type fsq --use_wandb true --wandb_project my-project
 ```
 
 ## Output
@@ -41,34 +54,44 @@ QUANTIZER_TYPE = 'fsq'   # or 'ddcl'
   - Periodic: `{quantizer_type}_vae_epoch_{n}.pt`
 
 ### Metrics Tracked
-- Reconstruction loss (MSE)
-- Regularization loss (DDCL only)
+- Reconstruction loss (MSE for all)
+- Regularization loss (KL divergence for VAE, commitment loss for VQ-VAE, communication loss for DDCL)
 - Codebook usage statistics (FSQ only)
 
-## ️Configuration
+## Configuration
 
-Edit the configuration section in `train.py`:
+**Available flags**:
+```bash
+--quantizer_type {fsq,ddcl,vae,vq_vae}  # Quantization method
+--batch_size 16                          # Batch size
+--epochs 100                             # Training epochs
+--lr 0.001                               # Learning rate
 
-```python
-# Training hyperparameters
-batch_size = 128
-epochs = 50
-lr = 3e-4
+# FSQ specific
+--fsq_levels 8 8 8 8                     # FSQ quantization levels
 
-# FSQ settings
-fsq_levels = [8, 6, 6, 5]
+# DDCL specific
+--ddcl_delta 0.1                         # DDCL grid width
 
-# DDCL settings
-ddcl_delta = 1 / 15
-ddcl_comm_weight = 1e-3
+# VQ-VAE specific
+--codebook_size 128                      # Codebook size
+
+# VAE/VQ-VAE/DDCL
+--reg_loss_weight 1e-4                   # KL (VAE), commitment (VQ-VAE), communication (DDCL)
+
+# WandB
+--use_wandb {true,false}                 # Enable logging
+--wandb_project ddcl-vae                 # Project name
 ```
 
 ## Key Files Explained
 
 ### `quantizers.py`
-Contains quantization implementations:
-- `FSQWrapper`: Wraps the FSQ quantizer with unified interface
-- `DDCL_Bottleneck`: Implements DDCL quantization
+Quantization implementations:
+- `FSQWrapper`: FSQ quantizer with unified interface
+- `DDCL_Bottleneck`: DDCL quantization
+- `VanillaVAE`: Gaussian VAE with KL divergence
+- `VQVAEQuantizer`: Vector quantization with codebook
 
 ### `models.py`
 Contains network architectures:
