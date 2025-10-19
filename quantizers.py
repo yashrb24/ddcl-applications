@@ -20,10 +20,11 @@ class DDCL_Bottleneck(nn.Module):
         """
         noise = (torch.rand_like(z) - 0.5) * self.delta
         z_q = z + noise
+        indices = torch.floor(z_q / self.delta).long()
 
         comm_loss = torch.log2((2 * torch.abs(z) / self.delta) + 1).mean()
 
-        return z_q, None, comm_loss  # Return None for indices to match VQ output
+        return z_q, indices, comm_loss
 
 
 class FSQWrapper(nn.Module):

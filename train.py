@@ -306,14 +306,19 @@ def main():
             run_name=run_name,
         )
 
-        # Compute codebook usage (FSQ and VQ-VAE)
-        if config.quantizer_type in ["fsq", "vq_vae"]:
+        # Compute codebook usage (FSQ, VQ-VAE, and DDCL)
+        if config.quantizer_type in ["fsq", "vq_vae", "ddcl"]:
             stats = compute_codebook_usage(model, val_loader, device)
             if stats:
-                print(
-                    f"  Codebook usage: {stats['unique_codes']}/{stats['total_codes']} "
-                    f"({stats['usage_percent']:.1f}%)"
-                )
+                if config.quantizer_type == "ddcl":
+                    # DDCL: print unique codes and per-dimension statistics
+                    print(f"  Codebook usage: {stats['unique_codes']} unique codes")
+                else:
+                    # FSQ/VQ-VAE: print with percentage
+                    print(
+                        f"  Codebook usage: {stats['unique_codes']}/{stats['total_codes']} "
+                        f"({stats['usage_percent']:.1f}%)"
+                    )
 
         # Save best model
         if val_recon_loss < best_val_loss:

@@ -1,8 +1,8 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
-
 import wandb
 
 
@@ -83,7 +83,7 @@ def visualize_reconstructions_new_arch(
 @torch.no_grad()
 def compute_codebook_usage(model, dataloader, device, num_batches=10):
     """
-    Compute which codebook indices are being used (for FSQ and VQ-VAE)
+    Compute which codebook indices are being used (for FSQ, VQ-VAE, and DDCL)
 
     Args:
         model: Quantized VAE model
@@ -94,7 +94,7 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
     Returns:
         Dictionary with usage statistics or None if not applicable
     """
-    if model.quantizer_type not in ["fsq", "vq_vae"]:
+    if model.quantizer_type not in ["fsq", "vq_vae", "ddcl"]:
         return None
 
     model.eval()
@@ -114,17 +114,30 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
         return None
 
     all_indices = torch.cat(all_indices, dim=0)
-    unique_indices = torch.unique(all_indices)
 
-    # Calculate total possible codes
-    total_codes = model.quantizer.codebook_size
-    usage_percent = (len(unique_indices) / total_codes) * 100
+    # DDCL (vector indices) is different from FSQ/VQ-VAE (scalar indices)
+    if model.quantizer_type == "ddcl":
+        # For DDCL: indices shape is [batch_size, latent_dim]
+        unique_vectors_np = np.unique(all_indices.numpy(), axis=0)
+        unique_count = len(unique_vectors_np)
 
-    stats = {
-        "unique_codes": len(unique_indices),
-        "total_codes": total_codes,
-        "usage_percent": usage_percent,
-    }
+        stats = {
+            "unique_codes": unique_count,
+        }
+
+    else:
+        # For FSQ/VQ-VAE: scalar indices
+        unique_indices = torch.unique(all_indices)
+
+        # Calculate total possible codes
+        total_codes = model.quantizer.codebook_size
+        usage_percent = (len(unique_indices) / total_codes) * 100
+
+        stats = {
+            "unique_codes": len(unique_indices),
+            "total_codes": total_codes,
+            "usage_percent": usage_percent,
+        }
 
     return stats
 
