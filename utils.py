@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 import wandb
 
@@ -118,8 +117,8 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
     # DDCL (vector indices) is different from FSQ/VQ-VAE (scalar indices)
     if model.quantizer_type == "ddcl":
         # For DDCL: indices shape is [batch_size, latent_dim]
-        unique_vectors_np = np.unique(all_indices.numpy(), axis=0)
-        unique_count = len(unique_vectors_np)
+        unique_vectors = torch.unique(all_indices, dim=0)
+        unique_count = unique_vectors.shape[0]
         print(f"  Codebook usage: {unique_count} unique codes")
 
     else:
