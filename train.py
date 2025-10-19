@@ -4,11 +4,12 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
 from torch.utils.data import DataLoader
+from torchmetrics.image import LearnedPerceptualImagePatchSimilarity
 from torchvision import datasets, transforms
 from tqdm import tqdm
 
-import wandb
 from models import QuantizedVAE
 from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
@@ -19,6 +20,11 @@ def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight
     total_loss = 0
     total_recon_loss = 0
     total_reg_loss = 0
+    total_perceptual_loss = 0
+
+    # Initialize perceptual loss function
+    perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
+        device)
 
     for batch_idx, (data, _) in enumerate(tqdm(dataloader, desc="Training")):
         data = data.to(device)
@@ -34,6 +40,11 @@ def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight
         total_batch_loss.backward()
         optimizer.step()
 
+        # Compute perceptual loss for evaluation only (no gradients)
+        with torch.no_grad():
+            perceptual_loss = perceptual_loss_fn(recon, data)
+            total_perceptual_loss += perceptual_loss.item()
+
         total_loss += total_batch_loss.item()
         total_recon_loss += recon_loss.item()
         total_reg_loss += reg_loss if isinstance(reg_loss, float) else reg_loss.item()
@@ -42,6 +53,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight
         "total_loss": total_loss / len(dataloader),
         "recon_loss": total_recon_loss / len(dataloader),
         "reg_loss": total_reg_loss / len(dataloader),
+        "perceptual_loss": total_perceptual_loss / len(dataloader),
     }
 
 
@@ -50,6 +62,11 @@ def validate(model, dataloader, device):
     """Validate model"""
     model.eval()
     total_loss = 0
+    total_perceptual_loss = 0
+
+    # Initialize perceptual loss function
+    perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
+        device)
 
     for data, _ in dataloader:
         data = data.to(device)
@@ -57,7 +74,11 @@ def validate(model, dataloader, device):
         loss = F.mse_loss(recon, data)
         total_loss += loss.item()
 
-    return total_loss / len(dataloader)
+        # Compute perceptual loss for evaluation
+        perceptual_loss = perceptual_loss_fn(recon, data)
+        total_perceptual_loss += perceptual_loss.item()
+
+    return total_loss / len(dataloader), total_perceptual_loss / len(dataloader)
 
 
 def parse_args():
@@ -181,13 +202,15 @@ def main():
             reg_loss_weight = config.reg_loss_weight
 
         case "vq_vae":
-            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=config.codebook_size, latent_dim=config.latent_dim).to(device)
+            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=config.codebook_size,
+                                 latent_dim=config.latent_dim).to(device)
             print("=" * 70)
             print("Training VQ-VAE")
             reg_loss_weight = config.reg_loss_weight
 
         case "ddcl":
-            model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta, latent_dim=config.latent_dim).to(device)
+            model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta, latent_dim=config.latent_dim).to(
+                device)
             print("=" * 70)
             print("Training DDCL-VAE")
             print(f"Quantization Delta: {config.ddcl_delta}")
@@ -216,7 +239,7 @@ def main():
         )
 
         # Validate
-        val_loss = validate(model, val_loader, device)
+        val_recon_loss, val_perceptual_loss = validate(model, val_loader, device)
 
         # Log metrics to wandb
         if args.use_wandb:
@@ -225,7 +248,9 @@ def main():
                 "train/total_loss": train_metrics['total_loss'],
                 "train/recon_loss": train_metrics['recon_loss'],
                 "train/reg_loss": train_metrics['reg_loss'],
-                "val/recon_loss": val_loss,
+                "train/perceptual_loss": train_metrics['perceptual_loss'],
+                "val/recon_loss": val_recon_loss,
+                "val/perceptual_loss": val_perceptual_loss,
             })
 
         # Print metrics
@@ -233,9 +258,10 @@ def main():
         print(
             f"  Train - Total: {train_metrics['total_loss']:.4f}, "
             f"Recon: {train_metrics['recon_loss']:.4f}, "
-            f"Reg: {train_metrics['reg_loss']:.4f}"
+            f"Reg: {train_metrics['reg_loss']:.4f}, "
+            f"Perceptual: {train_metrics['perceptual_loss']:.4f}"
         )
-        print(f"  Val Recon Loss: {val_loss:.4f}")
+        print(f"  Val - Recon Loss: {val_recon_loss:.4f}, Perceptual: {val_perceptual_loss:.4f}")
 
         # Visualize reconstructions
         visualize_reconstructions_new_arch(
@@ -259,11 +285,11 @@ def main():
                 )
 
         # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_recon_loss < best_val_loss:
+            best_val_loss = val_recon_loss
             best_path = checkpoint_dir / f"{config.quantizer_type}_vae_best.pt"
-            save_checkpoint(model, optimizer, epoch + 1, val_loss, best_path)
-            print(f"   New best validation loss: {val_loss:.4f}")
+            save_checkpoint(model, optimizer, epoch + 1, val_recon_loss, best_path)
+            print(f"   New best validation loss: {val_recon_loss:.4f}")
 
             # Log best model to wandb
             if args.use_wandb:
@@ -274,7 +300,7 @@ def main():
             checkpoint_path = (
                     checkpoint_dir / f"{config.quantizer_type}_vae_epoch_{epoch + 1}.pt"
             )
-            save_checkpoint(model, optimizer, epoch + 1, val_loss, checkpoint_path)
+            save_checkpoint(model, optimizer, epoch + 1, val_recon_loss, checkpoint_path)
 
         print("-" * 70)
 
