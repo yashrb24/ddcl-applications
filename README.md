@@ -14,7 +14,7 @@
 ### Installation
 
 ```bash
-pip install torch torchvision vector-quantize-pytorch tqdm matplotlib ipdb
+pip install -r requirements.txt
 ```
 
 ### Training
