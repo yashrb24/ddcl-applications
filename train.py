@@ -306,8 +306,8 @@ def main():
             run_name=run_name,
         )
 
-        # Compute codebook usage (FSQ only)
-        if config.quantizer_type == "fsq":
+        # Compute codebook usage (FSQ and VQ-VAE)
+        if config.quantizer_type in ["fsq", "vq_vae"]:
             stats = compute_codebook_usage(model, val_loader, device)
             if stats:
                 print(

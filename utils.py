@@ -83,7 +83,7 @@ def visualize_reconstructions_new_arch(
 @torch.no_grad()
 def compute_codebook_usage(model, dataloader, device, num_batches=10):
     """
-    Compute which codebook indices are being used (only for FSQ)
+    Compute which codebook indices are being used (for FSQ and VQ-VAE)
 
     Args:
         model: Quantized VAE model
@@ -94,7 +94,7 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
     Returns:
         Dictionary with usage statistics or None if not applicable
     """
-    if model.quantizer_type != "fsq":
+    if model.quantizer_type not in ["fsq", "vq_vae"]:
         return None
 
     model.eval()
