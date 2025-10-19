@@ -13,8 +13,11 @@ from tqdm import tqdm
 from models import QuantizedVAE
 from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
+# Perceptual loss computation interval (every N epochs)
+PERCEPTUAL_LOSS_INTERVAL = 5
 
-def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight=0.01):
+
+def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight=0.01, compute_perceptual=True):
     """Train for one epoch"""
     model.train()
     total_loss = 0
@@ -22,9 +25,11 @@ def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight
     total_reg_loss = 0
     total_perceptual_loss = 0
 
-    # Initialize perceptual loss function
-    perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
-        device)
+    # Initialize perceptual loss function only if needed
+    perceptual_loss_fn = None
+    if compute_perceptual:
+        perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
+            device)
 
     for batch_idx, (data, _) in enumerate(tqdm(dataloader, desc="Training")):
         data = data.to(device)
@@ -41,32 +46,39 @@ def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight
         optimizer.step()
 
         # Compute perceptual loss for evaluation only (no gradients)
-        with torch.no_grad():
-            perceptual_loss = perceptual_loss_fn(recon, data)
-            total_perceptual_loss += perceptual_loss.item()
+        if compute_perceptual:
+            with torch.no_grad():
+                perceptual_loss = perceptual_loss_fn(recon, data)
+                total_perceptual_loss += perceptual_loss.item()
 
         total_loss += total_batch_loss.item()
         total_recon_loss += recon_loss.item()
         total_reg_loss += reg_loss if isinstance(reg_loss, float) else reg_loss.item()
 
-    return {
+    metrics = {
         "total_loss": total_loss / len(dataloader),
         "recon_loss": total_recon_loss / len(dataloader),
         "reg_loss": total_reg_loss / len(dataloader),
-        "perceptual_loss": total_perceptual_loss / len(dataloader),
     }
+
+    if compute_perceptual:
+        metrics["perceptual_loss"] = total_perceptual_loss / len(dataloader)
+
+    return metrics
 
 
 @torch.no_grad()
-def validate(model, dataloader, device):
+def validate(model, dataloader, device, compute_perceptual=True):
     """Validate model"""
     model.eval()
     total_loss = 0
     total_perceptual_loss = 0
 
-    # Initialize perceptual loss function
-    perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
-        device)
+    # Initialize perceptual loss function only if needed
+    perceptual_loss_fn = None
+    if compute_perceptual:
+        perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
+            device)
 
     for data, _ in dataloader:
         data = data.to(device)
@@ -74,11 +86,15 @@ def validate(model, dataloader, device):
         loss = F.mse_loss(recon, data)
         total_loss += loss.item()
 
-        # Compute perceptual loss for evaluation
-        perceptual_loss = perceptual_loss_fn(recon, data)
-        total_perceptual_loss += perceptual_loss.item()
+        # Compute perceptual loss for evaluation only if needed
+        if compute_perceptual:
+            perceptual_loss = perceptual_loss_fn(recon, data)
+            total_perceptual_loss += perceptual_loss.item()
 
-    return total_loss / len(dataloader), total_perceptual_loss / len(dataloader)
+    avg_recon_loss = total_loss / len(dataloader)
+    avg_perceptual_loss = total_perceptual_loss / len(dataloader) if compute_perceptual else None
+
+    return avg_recon_loss, avg_perceptual_loss
 
 
 def parse_args():
@@ -233,35 +249,50 @@ def main():
     best_val_loss = float("inf")
 
     for epoch in range(config.epochs):
+        # Determine if we should compute perceptual loss this epoch
+        should_compute_perceptual = (epoch + 1) % PERCEPTUAL_LOSS_INTERVAL == 0
+
         # Train
         train_metrics = train_epoch(
-            model, train_loader, optimizer, criterion, device, reg_loss_weight
+            model, train_loader, optimizer, criterion, device, reg_loss_weight,
+            compute_perceptual=should_compute_perceptual
         )
 
         # Validate
-        val_recon_loss, val_perceptual_loss = validate(model, val_loader, device)
+        val_recon_loss, val_perceptual_loss = validate(
+            model, val_loader, device, compute_perceptual=should_compute_perceptual
+        )
 
         # Log metrics to wandb
         if args.use_wandb:
-            wandb.log({
+            log_dict = {
                 "epoch": epoch + 1,
                 "train/total_loss": train_metrics['total_loss'],
                 "train/recon_loss": train_metrics['recon_loss'],
                 "train/reg_loss": train_metrics['reg_loss'],
-                "train/perceptual_loss": train_metrics['perceptual_loss'],
                 "val/recon_loss": val_recon_loss,
-                "val/perceptual_loss": val_perceptual_loss,
-            })
+            }
+            # Only log perceptual loss when computed
+            if should_compute_perceptual:
+                log_dict["train/perceptual_loss"] = train_metrics['perceptual_loss']
+                log_dict["val/perceptual_loss"] = val_perceptual_loss
+            wandb.log(log_dict)
 
         # Print metrics
         print(f"\nEpoch {epoch + 1}/{config.epochs}")
-        print(
+        train_msg = (
             f"  Train - Total: {train_metrics['total_loss']:.4f}, "
             f"Recon: {train_metrics['recon_loss']:.4f}, "
-            f"Reg: {train_metrics['reg_loss']:.4f}, "
-            f"Perceptual: {train_metrics['perceptual_loss']:.4f}"
+            f"Reg: {train_metrics['reg_loss']:.4f}"
         )
-        print(f"  Val - Recon Loss: {val_recon_loss:.4f}, Perceptual: {val_perceptual_loss:.4f}")
+        if should_compute_perceptual:
+            train_msg += f", Perceptual: {train_metrics['perceptual_loss']:.4f}"
+        print(train_msg)
+
+        val_msg = f"  Val - Recon Loss: {val_recon_loss:.4f}"
+        if should_compute_perceptual:
+            val_msg += f", Perceptual: {val_perceptual_loss:.4f}"
+        print(val_msg)
 
         # Visualize reconstructions
         visualize_reconstructions_new_arch(
