@@ -120,10 +120,7 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
         # For DDCL: indices shape is [batch_size, latent_dim]
         unique_vectors_np = np.unique(all_indices.numpy(), axis=0)
         unique_count = len(unique_vectors_np)
-
-        stats = {
-            "unique_codes": unique_count,
-        }
+        print(f"  Codebook usage: {unique_count} unique codes")
 
     else:
         # For FSQ/VQ-VAE: scalar indices
@@ -133,13 +130,12 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
         total_codes = model.quantizer.codebook_size
         usage_percent = (len(unique_indices) / total_codes) * 100
 
-        stats = {
-            "unique_codes": len(unique_indices),
-            "total_codes": total_codes,
-            "usage_percent": usage_percent,
-        }
+        print(
+            f"  Codebook usage: {len(unique_indices)}/{total_codes} "
+            f"({usage_percent:.1f}%)"
+        )
 
-    return stats
+    return None
 
 
 def save_checkpoint(model, optimizer, epoch, loss, filepath):

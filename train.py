@@ -3,98 +3,15 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import wandb
-from torch.utils.data import DataLoader
-from torchmetrics.image import LearnedPerceptualImagePatchSimilarity
-from torchvision import datasets, transforms
-from tqdm import tqdm
 
-from models import QuantizedVAE
+from dataloading import get_dataloaders
+from models import create_model
+from train_utils import train_epoch, validate
 from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
 # Perceptual loss computation interval (every N epochs)
-PERCEPTUAL_LOSS_INTERVAL = 5
-
-
-def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight=0.01, compute_perceptual=True):
-    """Train for one epoch"""
-    model.train()
-    total_loss = 0
-    total_recon_loss = 0
-    total_reg_loss = 0
-    total_perceptual_loss = 0
-
-    # Initialize perceptual loss function only if needed
-    perceptual_loss_fn = None
-    if compute_perceptual:
-        perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
-            device)
-
-    for batch_idx, (data, _) in enumerate(tqdm(dataloader, desc="Training")):
-        data = data.to(device)
-        optimizer.zero_grad()
-
-        recon, _, reg_loss = model(data)
-
-        recon_loss = criterion(recon, data)
-
-        # Add regularization loss (weighted)
-        total_batch_loss = recon_loss + reg_loss_weight * reg_loss
-
-        total_batch_loss.backward()
-        optimizer.step()
-
-        # Compute perceptual loss for evaluation only (no gradients)
-        if compute_perceptual:
-            with torch.no_grad():
-                perceptual_loss = perceptual_loss_fn(recon, data)
-                total_perceptual_loss += perceptual_loss.item()
-
-        total_loss += total_batch_loss.item()
-        total_recon_loss += recon_loss.item()
-        total_reg_loss += reg_loss if isinstance(reg_loss, float) else reg_loss.item()
-
-    metrics = {
-        "total_loss": total_loss / len(dataloader),
-        "recon_loss": total_recon_loss / len(dataloader),
-        "reg_loss": total_reg_loss / len(dataloader),
-    }
-
-    if compute_perceptual:
-        metrics["perceptual_loss"] = total_perceptual_loss / len(dataloader)
-
-    return metrics
-
-
-@torch.no_grad()
-def validate(model, dataloader, device, compute_perceptual=True):
-    """Validate model"""
-    model.eval()
-    total_loss = 0
-    total_perceptual_loss = 0
-
-    # Initialize perceptual loss function only if needed
-    perceptual_loss_fn = None
-    if compute_perceptual:
-        perceptual_loss_fn = LearnedPerceptualImagePatchSimilarity(net_type='vgg', reduction='sum', normalize=True).to(
-            device)
-
-    for data, _ in dataloader:
-        data = data.to(device)
-        recon, _, _ = model(data)
-        loss = F.mse_loss(recon, data)
-        total_loss += loss.item()
-
-        # Compute perceptual loss for evaluation only if needed
-        if compute_perceptual:
-            perceptual_loss = perceptual_loss_fn(recon, data)
-            total_perceptual_loss += perceptual_loss.item()
-
-    avg_recon_loss = total_loss / len(dataloader)
-    avg_perceptual_loss = total_perceptual_loss / len(dataloader) if compute_perceptual else None
-
-    return avg_recon_loss, avg_perceptual_loss
+PERCEPTUAL_LOSS_INTERVAL = 20
 
 
 def parse_args():
@@ -174,76 +91,42 @@ def main():
     checkpoint_dir.mkdir(exist_ok=True)
 
     # ======================== DATA LOADING ========================
-    transform = transforms.Compose(
-        [transforms.ToTensor()]
-    )
-
-    train_dataset = datasets.CIFAR10(
-        root="./data", train=True, download=True, transform=transform
-    )
-    val_dataset = datasets.CIFAR10(
-        root="./data", train=False, download=True, transform=transform
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
+    train_loader, val_loader = get_dataloaders(
+        dataset_name="CIFAR10",
         batch_size=config.batch_size,
-        shuffle=True,
         num_workers=0,
-        pin_memory=False,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
+        pin_memory=False
     )
 
     # ======================== MODEL SETUP ========================
-    model = None
+    model = create_model(
+        quantizer_type=config.quantizer_type,
+        device=device,
+        fsq_levels=config.fsq_levels,
+        ddcl_delta=config.ddcl_delta,
+        codebook_size=config.codebook_size,
+        latent_dim=config.latent_dim
+    )
+
+    # Configure regularization loss weight based on quantizer type
     reg_loss_weight = None
     match config.quantizer_type:
         case "fsq":
-            model = QuantizedVAE(quantizer_type="fsq", levels=config.fsq_levels).to(device)
-            print("=" * 70)
-            print("Training FSQ-VAE")
-            print(f"Codebook size: {model.quantizer.codebook_size}")
             reg_loss_weight = 0.0  # No regularization loss for FSQ
-
         case "vae":
-            model = QuantizedVAE(quantizer_type="vae", latent_dim=config.latent_dim).to(device)
-            print("=" * 70)
-            print("Training Vanilla VAE")
             reg_loss_weight = config.reg_loss_weight
-
+            print(f"KL Loss Weight: {config.reg_loss_weight}")
         case "vq_vae":
-            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=config.codebook_size,
-                                 latent_dim=config.latent_dim).to(device)
-            print("=" * 70)
-            print("Training VQ-VAE")
             reg_loss_weight = config.reg_loss_weight
-
+            print(f"Commitment Loss Weight: {config.reg_loss_weight}")
         case "ddcl":
-            model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta, latent_dim=config.latent_dim).to(
-                device)
-            print("=" * 70)
-            print("Training DDCL-VAE")
-            print(f"Quantization Delta: {config.ddcl_delta}")
-            print(f"Communication Loss Weight: {config.reg_loss_weight}")
             reg_loss_weight = config.reg_loss_weight
-
+            print(f"Communication Loss Weight: {config.reg_loss_weight}")
         case "autoencoder":
-            model = QuantizedVAE(quantizer_type="autoencoder", latent_dim=config.latent_dim).to(device)
-            print("=" * 70)
-            print("Training Autoencoder")
-            reg_loss_weight = 0.0
+            reg_loss_weight = 0.0  # No regularization loss for autoencoder
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     criterion = nn.BCELoss()
-    print(f"Device: {device}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print("=" * 70)
 
     # ======================== TRAINING LOOP ========================
     best_val_loss = float("inf")
@@ -308,17 +191,7 @@ def main():
 
         # Compute codebook usage (FSQ, VQ-VAE, and DDCL)
         if config.quantizer_type in ["fsq", "vq_vae", "ddcl"]:
-            stats = compute_codebook_usage(model, val_loader, device)
-            if stats:
-                if config.quantizer_type == "ddcl":
-                    # DDCL: print unique codes and per-dimension statistics
-                    print(f"  Codebook usage: {stats['unique_codes']} unique codes")
-                else:
-                    # FSQ/VQ-VAE: print with percentage
-                    print(
-                        f"  Codebook usage: {stats['unique_codes']}/{stats['total_codes']} "
-                        f"({stats['usage_percent']:.1f}%)"
-                    )
+            compute_codebook_usage(model, val_loader, device)
 
         # Save best model
         if val_recon_loss < best_val_loss:

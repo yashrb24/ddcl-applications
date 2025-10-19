@@ -102,3 +102,58 @@ class QuantizedVAE(nn.Module):
         recon = self.decoder(z_q)
 
         return recon, indices, reg_loss
+
+
+def create_model(quantizer_type, device, fsq_levels=None, ddcl_delta=None,
+                 codebook_size=None, latent_dim=4):
+    """
+    Create a QuantizedVAE model with the specified quantizer type.
+
+    Args:
+        quantizer_type: Type of quantizer ('fsq', 'ddcl', 'vae', 'vq_vae', 'autoencoder')
+        device: Device to place the model on
+        fsq_levels: FSQ levels (list of ints) for FSQ quantizer
+        ddcl_delta: Delta value for DDCL quantizer
+        codebook_size: Codebook size for VQ-VAE quantizer
+        latent_dim: Latent dimension for non-FSQ quantizers
+
+    Returns:
+        model: QuantizedVAE model instance on the specified device
+    """
+    print("=" * 70)
+
+    model = None
+    match quantizer_type:
+        case "fsq":
+            if fsq_levels is None:
+                fsq_levels = [8, 8, 8, 8]
+            model = QuantizedVAE(quantizer_type="fsq", levels=fsq_levels).to(device)
+            print("Training FSQ-VAE")
+            print(f"Codebook size: {model.quantizer.codebook_size}")
+
+        case "vae":
+            model = QuantizedVAE(quantizer_type="vae", latent_dim=latent_dim).to(device)
+            print("Training Vanilla VAE")
+
+        case "vq_vae":
+            model = QuantizedVAE(quantizer_type="vq_vae", codebook_size=codebook_size,
+                                 latent_dim=latent_dim).to(device)
+            print("Training VQ-VAE")
+
+        case "ddcl":
+            model = QuantizedVAE(quantizer_type="ddcl", delta=ddcl_delta, latent_dim=latent_dim).to(device)
+            print("Training DDCL-VAE")
+            print(f"Quantization Delta: {ddcl_delta}")
+
+        case "autoencoder":
+            model = QuantizedVAE(quantizer_type="autoencoder", latent_dim=latent_dim).to(device)
+            print("Training Autoencoder")
+
+        case _:
+            raise ValueError(f"Unknown quantizer_type: {quantizer_type}")
+
+    print(f"Device: {device}")
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print("=" * 70)
+
+    return model
