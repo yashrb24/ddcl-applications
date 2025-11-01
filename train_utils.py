@@ -1,5 +1,4 @@
 import torch
-from torch.nn import functional as F
 from torchmetrics.image import LearnedPerceptualImagePatchSimilarity
 from tqdm import tqdm
 
@@ -55,7 +54,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, reg_loss_weight
 
 
 @torch.no_grad()
-def validate(model, dataloader, device, compute_perceptual=True):
+def validate(model, dataloader, criterion, device, compute_perceptual=True):
     """Validate model"""
     model.eval()
     total_loss = 0
@@ -70,7 +69,7 @@ def validate(model, dataloader, device, compute_perceptual=True):
     for data, _ in dataloader:
         data = data.to(device)
         recon, _, _ = model(data)
-        loss = F.mse_loss(recon, data)
+        loss = criterion(recon, data)
         total_loss += loss.item()
 
         # Compute perceptual loss for evaluation only if needed

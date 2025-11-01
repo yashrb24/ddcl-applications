@@ -80,7 +80,7 @@ def visualize_reconstructions_new_arch(
 
 
 @torch.no_grad()
-def compute_codebook_usage(model, dataloader, device, num_batches=10):
+def compute_codebook_usage(model, dataloader, device, num_batches=1e9):
     """
     Compute which codebook indices are being used (for FSQ, VQ-VAE, and DDCL)
 

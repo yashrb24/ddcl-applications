@@ -11,7 +11,7 @@ from train_utils import train_epoch, validate
 from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
 # Perceptual loss computation interval (every N epochs)
-PERCEPTUAL_LOSS_INTERVAL = 20
+PERCEPTUAL_LOSS_INTERVAL = 50
 
 
 def parse_args():
@@ -143,7 +143,7 @@ def main():
 
         # Validate
         val_recon_loss, val_perceptual_loss = validate(
-            model, val_loader, device, compute_perceptual=should_compute_perceptual
+            model, val_loader, criterion, device, compute_perceptual=should_compute_perceptual
         )
 
         # Log metrics to wandb

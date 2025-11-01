@@ -1,42 +1,47 @@
 import torch.nn as nn
 from quantizers import FSQWrapper, DDCL_Bottleneck, VanillaVAE, VQVAEWrapper, AEWrapper
 
-
 class Encoder(nn.Module):
-    """Encoder: Downsample image to latent representation"""
-
+    """Encoder: Less aggressive spatial downsampling, more channels → fewer channels"""
     def __init__(self, in_channels=3, latent_dim=4):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 12, 4, stride=2, padding=1),  # [batch, 12, 16, 16]
+            # 32×32 → 16×16
+            nn.Conv2d(in_channels, 32, 4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(12, 24, 4, stride=2, padding=1),  # [batch, 24, 8, 8]
+            
+            # Stay at 16×16, increase channels
+            nn.Conv2d(32, 64, 3, stride=1, padding=1),
             nn.ReLU(),
-            nn.Conv2d(24, 48, 4, stride=2, padding=1),  # [batch, 48, 4, 4]
-            nn.Flatten(),
-            nn.Linear(48 * 4 * 4, latent_dim),
+            
+            # Stay at 16×16, reduce to latent channels
+            nn.Conv2d(64, latent_dim, 1),
         )
-
+        # Output: [batch, latent_dim, 16, 16]
+    
     def forward(self, x):
         return self.encoder(x)
 
 
 class Decoder(nn.Module):
-    """Decoder: Upsample latent to image"""
-
+    """Decoder: Match encoder's spatial resolution"""
     def __init__(self, latent_dim=4, out_channels=3):
         super().__init__()
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 48 * 4 * 4),
-            nn.Unflatten(dim=1, unflattened_size=(48, 4, 4)),
-            nn.ConvTranspose2d(48, 24, 4, stride=2, padding=1),  # [batch, 24, 8, 8]
+            # Start at 16×16, expand channels
+            nn.Conv2d(latent_dim, 64, 1),
             nn.ReLU(),
-            nn.ConvTranspose2d(24, 12, 4, stride=2, padding=1),  # [batch, 12, 16, 16]
+            
+            # Stay at 16×16
+            nn.Conv2d(64, 32, 3, stride=1, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(12, out_channels, 4, stride=2, padding=1),  # [batch, 3, 32, 32]
+            
+            # 16×16 → 32×32
+            nn.ConvTranspose2d(32, out_channels, 4, stride=2, padding=1),
             nn.Sigmoid()
         )
-
+        # Output: [batch, 3, 32, 32]
+    
     def forward(self, x):
         return self.decoder(x)
 
