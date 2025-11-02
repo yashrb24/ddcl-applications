@@ -71,8 +71,8 @@ def visualize_reconstructions_new_arch(
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
 
     # Log to wandb if enabled (log every 5 epochs to reduce bandwidth)
-    if use_wandb and epoch % 10 == 0:
-        wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
+    # if use_wandb and epoch % 10 == 0:
+    #     wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
 
     plt.close()
 

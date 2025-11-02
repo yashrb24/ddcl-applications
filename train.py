@@ -159,7 +159,7 @@ def main():
             if should_compute_perceptual:
                 log_dict["train/perceptual_loss"] = train_metrics['perceptual_loss']
                 log_dict["val/perceptual_loss"] = val_perceptual_loss
-            wandb.log(log_dict)
+            wandb.log(log_dict, step=epoch + 1)
 
         # Print metrics
         print(f"\nEpoch {epoch + 1}/{config.epochs}")
@@ -194,7 +194,7 @@ def main():
             codebook_metrics = compute_codebook_usage(model, val_loader, device)
             # Log codebook metrics to wandb
             if codebook_metrics and args.use_wandb:
-                wandb.log(codebook_metrics)
+                wandb.log(codebook_metrics, step=epoch + 1)
 
         # Save best model
         if val_recon_loss < best_val_loss:
