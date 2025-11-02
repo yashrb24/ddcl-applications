@@ -15,10 +15,13 @@ parameters:
   
   # Fixed training parameters
   batch_size:
-    value: 64
+    value: 16
   
   epochs:
-    value: 50
+    value: 100
   
   lr:
-    value: 0.0003
+    value: 0.001
+
+  use_wandb:
+    value: True

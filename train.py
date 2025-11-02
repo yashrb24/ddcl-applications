@@ -11,7 +11,7 @@ from train_utils import train_epoch, validate
 from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
 # Perceptual loss computation interval (every N epochs)
-PERCEPTUAL_LOSS_INTERVAL = 50
+PERCEPTUAL_LOSS_INTERVAL = 10
 
 
 def parse_args():
@@ -191,7 +191,10 @@ def main():
 
         # Compute codebook usage (FSQ, VQ-VAE, and DDCL)
         if config.quantizer_type in ["fsq", "vq_vae", "ddcl"]:
-            compute_codebook_usage(model, val_loader, device)
+            codebook_metrics = compute_codebook_usage(model, val_loader, device)
+            # Log codebook metrics to wandb
+            if codebook_metrics and args.use_wandb:
+                wandb.log(codebook_metrics)
 
         # Save best model
         if val_recon_loss < best_val_loss:
@@ -200,9 +203,9 @@ def main():
             save_checkpoint(model, optimizer, epoch + 1, val_recon_loss, best_path)
             print(f"   New best validation loss: {val_recon_loss:.4f}")
 
-            # Log best model to wandb
-            if args.use_wandb:
-                wandb.log({"best_val_loss": best_val_loss})
+        # Log best model to wandb
+        # if args.use_wandb:
+        #     wandb.log({"best_val_loss": best_val_loss})
 
         # Save a checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:

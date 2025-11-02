@@ -121,6 +121,8 @@ def compute_codebook_usage(model, dataloader, device, num_batches=1e9):
         unique_count = unique_vectors.shape[0]
         print(f"  Codebook usage: {unique_count} unique codes")
 
+        return {"codebook/unique_codes": unique_count}
+
     else:
         # For FSQ/VQ-VAE: scalar indices
         unique_indices = torch.unique(all_indices)
@@ -134,7 +136,11 @@ def compute_codebook_usage(model, dataloader, device, num_batches=1e9):
             f"({usage_percent:.1f}%)"
         )
 
-    return None
+        return {
+            "codebook/unique_codes": len(unique_indices),
+            "codebook/total_codes": total_codes,
+            "codebook/usage_percent": usage_percent
+        }
 
 
 def save_checkpoint(model, optimizer, epoch, loss, filepath):
