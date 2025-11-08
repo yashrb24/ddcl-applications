@@ -117,7 +117,9 @@ def compute_codebook_usage(model, dataloader, device, num_batches=1e9):
     # DDCL (vector indices) is different from FSQ/VQ-VAE (scalar indices)
     if model.quantizer_type == "ddcl":
         # For DDCL: indices shape is [batch_size, latent_dim]
-        unique_vectors = torch.unique(all_indices, dim=0)
+        all_indices_permuted = all_indices.permute(0, 2, 3, 1)
+        all_indices_flattened = all_indices_permuted.reshape(-1, model.quantizer.latent_dim)
+        unique_vectors = torch.unique(all_indices_flattened.int(), dim=0)
         unique_count = unique_vectors.shape[0]
         print(f"  Codebook usage: {unique_count} unique codes")
 
