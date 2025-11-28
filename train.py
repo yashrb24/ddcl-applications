@@ -1,61 +1,17 @@
 import argparse
-import torch
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from tqdm import tqdm
 from pathlib import Path
+
+import torch
+import torch.nn as nn
 import wandb
 
-from models import QuantizedVAE
-from utils import visualize_reconstructions, compute_codebook_usage, save_checkpoint
+from dataloading import get_dataloaders
+from models import create_model
+from train_utils import train_epoch, validate
+from utils import compute_codebook_usage, save_checkpoint, visualize_reconstructions_new_arch
 
-
-def train_epoch(model, dataloader, optimizer, device, comm_loss_weight=0.01):
-    """Train for one epoch"""
-    model.train()
-    total_loss = 0
-    total_recon_loss = 0
-    total_reg_loss = 0
-
-    for batch_idx, (data, _) in enumerate(tqdm(dataloader, desc="Training")):
-        data = data.to(device)
-        optimizer.zero_grad()
-
-        recon, _, reg_loss = model(data)
-
-        recon_loss = F.mse_loss(recon, data)
-
-        # Add regularization loss (weighted)
-        total_batch_loss = recon_loss + comm_loss_weight * reg_loss
-
-        total_batch_loss.backward()
-        optimizer.step()
-
-        total_loss += total_batch_loss.item()
-        total_recon_loss += recon_loss.item()
-        total_reg_loss += reg_loss if isinstance(reg_loss, float) else reg_loss.item()
-
-    return {
-        "total_loss": total_loss / len(dataloader),
-        "recon_loss": total_recon_loss / len(dataloader),
-        "reg_loss": total_reg_loss / len(dataloader),
-    }
-
-
-@torch.no_grad()
-def validate(model, dataloader, device):
-    """Validate model"""
-    model.eval()
-    total_loss = 0
-
-    for data, _ in dataloader:
-        data = data.to(device)
-        recon, _, _ = model(data)
-        loss = F.mse_loss(recon, data)
-        total_loss += loss.item()
-
-    return total_loss / len(dataloader)
+# Perceptual loss computation interval (every N epochs)
+PERCEPTUAL_LOSS_INTERVAL = 10
 
 
 def parse_args():
@@ -63,13 +19,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train Quantized VAE")
 
     # Model configuration
-    parser.add_argument("--quantizer_type", type=str, default="fsq", choices=["fsq", "ddcl"],
-                        help="Quantizer type: 'fsq' or 'ddcl'")
+    parser.add_argument("--quantizer_type", type=str, default="fsq",
+                        choices=["fsq", "ddcl", "vae", "vq_vae", "autoencoder"],
+                        help="Quantizer type: 'fsq' or 'ddcl' or 'vae' or 'vq_vae' or 'autoencoder'")
 
     # Training hyperparameters
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    parser.add_argument("--epochs", type=int, default=50, help="Number of epochs")
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     # FSQ settings
     parser.add_argument("--fsq_levels", type=int, nargs="+", default=[8, 8, 8, 8],
@@ -77,12 +34,19 @@ def parse_args():
 
     # DDCL settings
     parser.add_argument("--ddcl_delta", type=float, default=0.1, help="DDCL quantization grid width")
-    parser.add_argument("--ddcl_comm_weight", type=float, default=1e-4,
-                        help="DDCL communication loss weight")
+    parser.add_argument("--reg_loss_weight", type=float, default=1e-4,
+                        help="regularization loss weight, KL loss weight for VAE, commitment loss for vqvae, communication loss weight for DDCL")
+
+    # VQ-VAE settings
+    parser.add_argument("--codebook_size", type=int, default=128, help="VQ-VAE codebook size")
+
+    # General quantizer settings
+    parser.add_argument("--latent_dim", type=int, default=4,
+                        help="Latent space dimensionality (used for all quantizers except FSQ)")
 
     # Wandb settings
     parser.add_argument("--use_wandb", type=lambda x: x.lower() == 'true',
-                      default=True, help="Enable wandb logging")
+                        default=False, help="Enable wandb logging")
     parser.add_argument("--wandb_project", type=str, default="ddcl-vae", help="Wandb project name")
 
     return parser.parse_args()
@@ -95,21 +59,31 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize wandb if requested
+    config = None
     if args.use_wandb:
-      # Check if wandb run already exists (from sweep agent)
-      if wandb.run is None:
+        # Check if wandb run already exists (from sweep agent)
+        if wandb.run is None:
             wandb.init(project=args.wandb_project, config=vars(args))
             config = wandb.config
     else:
         config = args
 
-    # Create run-specific name for organizing outputs during sweeps
-    if config.quantizer_type == "ddcl":
-        run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.ddcl_comm_weight}"
-    else:
-        # For FSQ, could include levels if desired
-        run_name = f"fsq"
-    
+    # Create a run-specific name for organizing outputs during sweeps
+    run_name = None
+    match config.quantizer_type:
+        case "fsq":
+            run_name = f"fsq_levels{config.fsq_levels}"
+        case "ddcl":
+            run_name = f"ddcl_delta{config.ddcl_delta}_weight{config.reg_loss_weight}"
+        case "vae":
+            run_name = f"vae"
+        case "vq_vae":
+            run_name = f"vq_vae"
+        case "autoencoder":
+            run_name = f"autoencoder"
+        case _:
+            raise ValueError(f"Unknown quantizer_type: {config.quantizer_type}")
+
     # Paths
     output_dir = Path("outputs")
     checkpoint_dir = Path("checkpoints")
@@ -117,85 +91,94 @@ def main():
     checkpoint_dir.mkdir(exist_ok=True)
 
     # ======================== DATA LOADING ========================
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-    )
-
-    train_dataset = datasets.CIFAR10(
-        root="./data", train=True, download=True, transform=transform
-    )
-    val_dataset = datasets.CIFAR10(
-        root="./data", train=False, download=True, transform=transform
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
+    train_loader, val_loader = get_dataloaders(
+        dataset_name="CIFAR10",
         batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=12,
-        pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=12,
-        pin_memory=True,
+        num_workers=0,
+        pin_memory=False
     )
 
     # ======================== MODEL SETUP ========================
-    if config.quantizer_type == "fsq":
-        model = QuantizedVAE(quantizer_type="fsq", levels=config.fsq_levels).to(device)
-        print("=" * 70)
-        print("Training FSQ-VAE")
-        print(f"Codebook size: {model.quantizer.codebook_size}")
-        comm_loss_weight = 0.0  # No regularization loss for FSQ
-    else:
-        model = QuantizedVAE(quantizer_type="ddcl", delta=config.ddcl_delta).to(device)
-        print("=" * 70)
-        print("Training DDCL-VAE")
-        print(f"Quantization Delta: {config.ddcl_delta}")
-        print(f"Communication Loss Weight: {config.ddcl_comm_weight}")
-        comm_loss_weight = config.ddcl_comm_weight
+    model = create_model(
+        quantizer_type=config.quantizer_type,
+        device=device,
+        fsq_levels=config.fsq_levels,
+        ddcl_delta=config.ddcl_delta,
+        codebook_size=config.codebook_size,
+        latent_dim=config.latent_dim
+    )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr)
-    print(f"Device: {device}")
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print("=" * 70)
+    # Configure regularization loss weight based on quantizer type
+    reg_loss_weight = None
+    match config.quantizer_type:
+        case "fsq":
+            reg_loss_weight = 0.0  # No regularization loss for FSQ
+        case "vae":
+            reg_loss_weight = config.reg_loss_weight
+            print(f"KL Loss Weight: {config.reg_loss_weight}")
+        case "vq_vae":
+            reg_loss_weight = config.reg_loss_weight
+            print(f"Commitment Loss Weight: {config.reg_loss_weight}")
+        case "ddcl":
+            reg_loss_weight = config.reg_loss_weight
+            print(f"Communication Loss Weight: {config.reg_loss_weight}")
+        case "autoencoder":
+            reg_loss_weight = 0.0  # No regularization loss for autoencoder
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    criterion = nn.BCELoss()
 
     # ======================== TRAINING LOOP ========================
     best_val_loss = float("inf")
 
     for epoch in range(config.epochs):
+        # Determine if we should compute perceptual loss this epoch
+        should_compute_perceptual = (epoch + 1) % PERCEPTUAL_LOSS_INTERVAL == 0
+
         # Train
         train_metrics = train_epoch(
-            model, train_loader, optimizer, device, comm_loss_weight
+            model, train_loader, optimizer, criterion, device, reg_loss_weight,
+            compute_perceptual=should_compute_perceptual
         )
 
         # Validate
-        val_loss = validate(model, val_loader, device)
+        val_recon_loss, val_perceptual_loss = validate(
+            model, val_loader, criterion, device, compute_perceptual=should_compute_perceptual
+        )
 
         # Log metrics to wandb
         if args.use_wandb:
-            wandb.log({
+            log_dict = {
                 "epoch": epoch + 1,
                 "train/total_loss": train_metrics['total_loss'],
                 "train/recon_loss": train_metrics['recon_loss'],
                 "train/reg_loss": train_metrics['reg_loss'],
-                "val/recon_loss": val_loss,
-            })
+                "val/recon_loss": val_recon_loss,
+            }
+            # Only log perceptual loss when computed
+            if should_compute_perceptual:
+                log_dict["train/perceptual_loss"] = train_metrics['perceptual_loss']
+                log_dict["val/perceptual_loss"] = val_perceptual_loss
+            wandb.log(log_dict, step=epoch + 1)
 
         # Print metrics
         print(f"\nEpoch {epoch + 1}/{config.epochs}")
-        print(
+        train_msg = (
             f"  Train - Total: {train_metrics['total_loss']:.4f}, "
             f"Recon: {train_metrics['recon_loss']:.4f}, "
             f"Reg: {train_metrics['reg_loss']:.4f}"
         )
-        print(f"  Val Recon Loss: {val_loss:.4f}")
+        if should_compute_perceptual:
+            train_msg += f", Perceptual: {train_metrics['perceptual_loss']:.4f}"
+        print(train_msg)
+
+        val_msg = f"  Val - Recon Loss: {val_recon_loss:.4f}"
+        if should_compute_perceptual:
+            val_msg += f", Perceptual: {val_perceptual_loss:.4f}"
+        print(val_msg)
 
         # Visualize reconstructions
-        visualize_reconstructions(
+        visualize_reconstructions_new_arch(
             model,
             val_loader,
             device,
@@ -206,32 +189,30 @@ def main():
             run_name=run_name,
         )
 
-        # Compute codebook usage (FSQ only)
-        if config.quantizer_type == "fsq" and (epoch + 1) % 5 == 0:
-            stats = compute_codebook_usage(model, val_loader, device)
-            if stats:
-                print(
-                    f"  Codebook usage: {stats['unique_codes']}/{stats['total_codes']} "
-                    f"({stats['usage_percent']:.1f}%)"
-                )
+        # Compute codebook usage (FSQ, VQ-VAE, and DDCL)
+        if config.quantizer_type in ["fsq", "vq_vae", "ddcl"]:
+            codebook_metrics = compute_codebook_usage(model, val_loader, device)
+            # Log codebook metrics to wandb
+            if codebook_metrics and args.use_wandb:
+                wandb.log(codebook_metrics, step=epoch + 1)
 
         # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_recon_loss < best_val_loss:
+            best_val_loss = val_recon_loss
             best_path = checkpoint_dir / f"{config.quantizer_type}_vae_best.pt"
-            save_checkpoint(model, optimizer, epoch + 1, val_loss, best_path)
-            print(f"   New best validation loss: {val_loss:.4f}")
+            save_checkpoint(model, optimizer, epoch + 1, val_recon_loss, best_path)
+            print(f"   New best validation loss: {val_recon_loss:.4f}")
 
-            # Log best model to wandb
-            if args.use_wandb:
-                wandb.log({"best_val_loss": best_val_loss})
+        # Log best model to wandb
+        # if args.use_wandb:
+        #     wandb.log({"best_val_loss": best_val_loss})
 
-        # Save checkpoint every 10 epochs
+        # Save a checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
             checkpoint_path = (
                     checkpoint_dir / f"{config.quantizer_type}_vae_epoch_{epoch + 1}.pt"
             )
-            save_checkpoint(model, optimizer, epoch + 1, val_loss, checkpoint_path)
+            save_checkpoint(model, optimizer, epoch + 1, val_recon_loss, checkpoint_path)
 
         print("-" * 70)
 

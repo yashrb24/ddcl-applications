@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from vector_quantize_pytorch import FSQ
+from vector_quantize_pytorch import FSQ, VectorQuantize
 
 
 class DDCL_Bottleneck(nn.Module):
@@ -20,27 +20,11 @@ class DDCL_Bottleneck(nn.Module):
         """
         noise = (torch.rand_like(z) - 0.5) * self.delta
         z_q = z + noise
+        indices = torch.floor(z_q / self.delta).long()
 
         comm_loss = torch.log2((2 * torch.abs(z) / self.delta) + 1).mean()
 
-        return z_q, None, comm_loss  # Return None for indices to match VQ output
-
-    @torch.no_grad()
-    def quantize_and_dequantize(self, z):
-        """
-        Unused as of now
-        The INFERENCE pass. This performs the full, non-differentiable
-        quantization and de-quantization round trip.
-        """
-        # --- Sender Side ---
-        noise = (torch.rand_like(z) - 0.5) * self.delta
-        z_prime = z + noise
-        indices = torch.floor(z_prime / self.delta).long()
-
-        # --- Receiver Side ---
-        C_m = self.delta * (indices.float() + 0.5)
-        z_q = C_m - noise
-        return z_q, indices
+        return z_q, indices, comm_loss
 
 
 class FSQWrapper(nn.Module):
@@ -55,3 +39,63 @@ class FSQWrapper(nn.Module):
         """Forward pass that matches DDCL interface"""
         z_q, indices = self.fsq(z)
         return z_q, indices, 0.0  # No regularization loss for FSQ
+
+
+class VanillaVAE(nn.Module):
+    """
+    Standard Variational Autoencoder bottleneck with Gaussian latent space.
+    Uses reparameterization trick for sampling during training.
+    """
+
+    def __init__(self, latent_dim=4):
+        super().__init__()
+        self.latent_dim = latent_dim
+
+    def forward(self, z):
+        """
+        Forward pass for VAE bottleneck.
+        
+        Args:
+            z: Encoder output of shape (batch, 2*latent_dim) containing mu and logvar
+            
+        Returns:
+            z_sampled: Sampled latent vector (batch, latent_dim)
+            None: No indices for VAE
+            kl_loss: KL divergence acts as regularization loss
+        """
+        # Split into mu and logvar
+        mu = z[:, :self.latent_dim]
+        logvar = z[:, self.latent_dim:]
+
+        # Reparameterization trick: z = mu + sigma * epsilon
+        std = torch.exp(0.5 * logvar)
+        epsilon = torch.randn_like(std)
+        z_sampled = mu + std * epsilon
+
+        # KL divergence loss: -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+
+        return z_sampled, None, kl_loss
+
+
+class VQVAEWrapper(nn.Module):
+    def __init__(self, codebook_size, latent_dim=4):
+        super().__init__()
+        self.codebook_size = codebook_size
+        self.latent_dim = latent_dim
+        self.vq = VectorQuantize(dim=latent_dim, codebook_size=codebook_size)
+
+    def forward(self, z):
+        z_q, indices, commitment_loss = self.vq(z)
+        return z_q, indices, commitment_loss
+
+
+class AEWrapper(nn.Module):
+    """A fake quantizer that does nothing, for implementing a vanilla autoencoder"""
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # No quantization
+        return x, None, 0.0

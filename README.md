@@ -1,32 +1,55 @@
-## 📁 Project Structure
+## Project Structure
 
 ```
 .
-├── train.py           # Main training script
-├── models.py          # VAE architecture (Encoder, Decoder, QuantizedVAE)
-├── quantizers.py      # Quantization methods (FSQ, DDCL)
-├── utils.py           # Visualization and utilities
-├── outputs/           # Generated visualizations (created automatically)
-├── checkpoints/       # Saved model checkpoints (created automatically)
-└── data/             # CIFAR-10 dataset (downloaded automatically)
+├── train.py              # Main training script with CLI interface
+├── models.py             # VAE architecture (Encoder, Decoder, QuantizedVAE)
+├── quantizers.py         # Quantization methods (FSQ, DDCL, VAE, VQ-VAE)
+├── dataloading.py        # Data loading utilities for CIFAR-10
+├── train_utils.py        # Training and validation functions
+├── utils.py              # Visualization and codebook analysis utilities
+├── run_sweep.py          # WandB hyperparameter sweep script
+├── sweep_config.yaml     # Configuration for hyperparameter sweeps
+├── requirements.txt      # Python dependencies
+├── pyproject.toml        # Python project configuration
+├── outputs/              # Generated visualizations (created automatically)
+├── checkpoints/          # Saved model checkpoints (created automatically)
+├── data/                 # CIFAR-10 dataset (downloaded automatically)
+└── archived/             # Archived old implementations
 ```
 
 ### Installation
 
 ```bash
-pip install torch torchvision vector-quantize-pytorch tqdm matplotlib
+pip install -r requirements.txt
 ```
 
 ### Training
 
+**Basic usage**:
 ```bash
-python train.py
+python train.py --quantizer_type fsq  # Options: fsq, ddcl, vae, vq_vae, autoencoder
 ```
 
-To switch quantization methods, edit `train.py`:
+**Examples**:
+```bash
+# FSQ with custom levels
+python train.py --quantizer_type fsq --fsq_levels 8 8 8 8
 
-```python
-QUANTIZER_TYPE = 'fsq'   # or 'ddcl'
+# DDCL with custom delta
+python train.py --quantizer_type ddcl --ddcl_delta 0.1 --reg_loss_weight 1e-4
+
+# Vanilla VAE
+python train.py --quantizer_type vae --reg_loss_weight 1e-4
+
+# VQ-VAE with codebook
+python train.py --quantizer_type vq_vae --codebook_size 128 --reg_loss_weight 1e-4
+
+# Vanilla Autoencoder (no quantization)
+python train.py --quantizer_type autoencoder --latent_dim 8
+
+# With WandB logging
+python train.py --quantizer_type fsq --use_wandb true --wandb_project my-project
 ```
 
 ## Output
@@ -41,56 +64,35 @@ QUANTIZER_TYPE = 'fsq'   # or 'ddcl'
   - Periodic: `{quantizer_type}_vae_epoch_{n}.pt`
 
 ### Metrics Tracked
-- Reconstruction loss (MSE)
-- Regularization loss (DDCL only)
-- Codebook usage statistics (FSQ only)
+- Reconstruction loss (MSE for all)
+- Regularization loss (KL divergence for VAE, commitment loss for VQ-VAE, communication loss for DDCL)
+- Codebook usage statistics (FSQ, VQ-VAE and DDCL only)
 
-## ️Configuration
+## Configuration
 
-Edit the configuration section in `train.py`:
+**Available flags**:
+```bash
+--quantizer_type {fsq,ddcl,vae,vq_vae,autoencoder}  # Quantization method
+--batch_size 16                                     # Batch size
+--epochs 100                                        # Training epochs
+--lr 0.001                                          # Learning rate
 
-```python
-# Training hyperparameters
-batch_size = 128
-epochs = 50
-lr = 3e-4
+# FSQ specific
+--fsq_levels 8 8 8 8                                # FSQ quantization levels
 
-# FSQ settings
-fsq_levels = [8, 6, 6, 5]
+# DDCL specific
+--ddcl_delta 0.1                                    # DDCL grid width
 
-# DDCL settings
-ddcl_delta = 1 / 15
-ddcl_comm_weight = 1e-3
-```
+# VQ-VAE specific
+--codebook_size 128                                 # Codebook size
 
-## Key Files Explained
+# General quantizer settings
+--latent_dim 4                                      # Latent space dimensionality (non-FSQ only)
 
-### `quantizers.py`
-Contains quantization implementations:
-- `FSQWrapper`: Wraps the FSQ quantizer with unified interface
-- `DDCL_Bottleneck`: Implements DDCL quantization
+# VAE/VQ-VAE/DDCL
+--reg_loss_weight 1e-4                              # KL (VAE), commitment (VQ-VAE), communication (DDCL)
 
-### `models.py`
-Contains network architectures:
-- `Encoder`: CNN encoder (32x32 → 4x4 latent)
-- `Decoder`: CNN decoder (4x4 latent → 32x32)
-- `QuantizedVAE`: Main model with pluggable quantizers
-
-### `utils.py`
-Helper functions:
-- `visualize_reconstructions()`: Generate 4x4 comparison grids
-- `compute_codebook_usage()`: Analyze FSQ codebook utilization
-- `save_checkpoint()` / `load_checkpoint()`: Model persistence
-
-## Understanding FSQ Levels
-
-FSQ `levels` parameter defines discrete values per latent dimension:
-
-```python
-levels = [8, 5, 5, 5]
-# Dim 0: 8 values   → {-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5}
-# Dim 1: 5 values   → {-2, -1, 0, 1, 2}
-# Dim 2: 5 values   → {-2, -1, 0, 1, 2}
-# Dim 3: 5 values   → {-2, -1, 0, 1, 2}
-# Total codebook size = 8 × 5 × 5 × 5 = 1000
+# WandB
+--use_wandb {true,false}                            # Enable logging
+--wandb_project ddcl-vae                            # Project name
 ```

@@ -1,20 +1,13 @@
-import torch
-import matplotlib.pyplot as plt
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+import torch
 import wandb
 
 
-def denormalize(tensor, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
-    """Denormalize tensor from [-1, 1] to [0, 1]"""
-    tensor = tensor.clone()
-    for t, m, s in zip(tensor, mean, std):
-        t.mul_(s).add_(m)
-    return tensor
-
-
 @torch.no_grad()
-def visualize_reconstructions(
-    model, dataloader, device, epoch, quantizer, save_dir="outputs", use_wandb=False, run_name=None
+def visualize_reconstructions_new_arch(
+        model, dataloader, device, epoch, quantizer, save_dir="outputs", use_wandb=False, run_name=None
 ):
     """
     Generate and save a 4x4 grid of original and reconstructed images
@@ -38,7 +31,7 @@ def visualize_reconstructions(
     else:
         # Legacy behavior: organize by quantizer type only
         output_path = Path(save_dir) / quantizer
-    
+
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Get a batch of images
@@ -47,14 +40,6 @@ def visualize_reconstructions(
 
     # Get reconstructions
     reconstructions, _, _ = model(images)
-
-    # Denormalize for visualization
-    images = denormalize(images.cpu())
-    reconstructions = denormalize(reconstructions.cpu())
-
-    # Clamp to [0, 1]
-    images = torch.clamp(images, 0, 1)
-    reconstructions = torch.clamp(reconstructions, 0, 1)
 
     # Create figure with original and reconstructed images
     fig, axes = plt.subplots(4, 4, figsize=(10, 10))
@@ -70,12 +55,12 @@ def visualize_reconstructions(
         col = idx % 4
 
         # Original images (top 2 rows)
-        img = images[idx].permute(1, 2, 0).numpy()
+        img = images[idx].permute(1, 2, 0).cpu().numpy()
         axes[row, col].imshow(img)
         axes[row, col].axis("off")
 
         # Reconstructed images (bottom 2 rows)
-        recon = reconstructions[idx].permute(1, 2, 0).numpy()
+        recon = reconstructions[idx].permute(1, 2, 0).cpu().numpy()
         axes[row + 2, col].imshow(recon)
         axes[row + 2, col].axis("off")
 
@@ -84,20 +69,20 @@ def visualize_reconstructions(
     # Save figure locally
     save_path = output_path / f"reconstruction_epoch_{epoch:03d}.png"
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    
+
     # Log to wandb if enabled (log every 5 epochs to reduce bandwidth)
-    if use_wandb and epoch % 10 == 0:
-         wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
-    
+    # if use_wandb and epoch % 10 == 0:
+    #     wandb.log({"reconstructions": wandb.Image(fig)}, step=epoch)
+
     plt.close()
 
     print(f"  → Saved reconstruction grid to {save_path}")
 
 
 @torch.no_grad()
-def compute_codebook_usage(model, dataloader, device, num_batches=10):
+def compute_codebook_usage(model, dataloader, device, num_batches=1e9):
     """
-    Compute which codebook indices are being used (only for FSQ)
+    Compute which codebook indices are being used (for FSQ, VQ-VAE, and DDCL)
 
     Args:
         model: Quantized VAE model
@@ -108,7 +93,7 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
     Returns:
         Dictionary with usage statistics or None if not applicable
     """
-    if model.quantizer_type != "fsq":
+    if model.quantizer_type not in ["fsq", "vq_vae", "ddcl"]:
         return None
 
     model.eval()
@@ -128,19 +113,36 @@ def compute_codebook_usage(model, dataloader, device, num_batches=10):
         return None
 
     all_indices = torch.cat(all_indices, dim=0)
-    unique_indices = torch.unique(all_indices)
 
-    # Calculate total possible codes
-    total_codes = model.quantizer.codebook_size
-    usage_percent = (len(unique_indices) / total_codes) * 100
+    # DDCL (vector indices) is different from FSQ/VQ-VAE (scalar indices)
+    if model.quantizer_type == "ddcl":
+        # For DDCL: indices shape is [batch_size, latent_dim]
+        all_indices_permuted = all_indices.permute(0, 2, 3, 1)
+        all_indices_flattened = all_indices_permuted.reshape(-1, model.quantizer.latent_dim)
+        unique_vectors = torch.unique(all_indices_flattened.int(), dim=0)
+        unique_count = unique_vectors.shape[0]
+        print(f"  Codebook usage: {unique_count} unique codes")
 
-    stats = {
-        "unique_codes": len(unique_indices),
-        "total_codes": total_codes,
-        "usage_percent": usage_percent,
-    }
+        return {"codebook/unique_codes": unique_count}
 
-    return stats
+    else:
+        # For FSQ/VQ-VAE: scalar indices
+        unique_indices = torch.unique(all_indices)
+
+        # Calculate total possible codes
+        total_codes = model.quantizer.codebook_size
+        usage_percent = (len(unique_indices) / total_codes) * 100
+
+        print(
+            f"  Codebook usage: {len(unique_indices)}/{total_codes} "
+            f"({usage_percent:.1f}%)"
+        )
+
+        return {
+            "codebook/unique_codes": len(unique_indices),
+            "codebook/total_codes": total_codes,
+            "codebook/usage_percent": usage_percent
+        }
 
 
 def save_checkpoint(model, optimizer, epoch, loss, filepath):
