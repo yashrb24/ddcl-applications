@@ -620,7 +620,7 @@ class FSQGanVAE(VQGanVAE):
 
 class DDCLGanVAE(VQGanVAE):
 
-    def _init__(self, *, ddcl_delta=0.1, ddcl_lambda=1.0, **kwargs):
+    def __init__(self, *, ddcl_delta=0.1, ddcl_lambda=1.0, **kwargs):
         super().__init__(**kwargs)
         self.lookup_free_quantization = False
         self.quantizer = DDCL(ddcl_delta=ddcl_delta, ddcl_lambda=ddcl_lambda)
