@@ -1,0 +1,20 @@
+[project]
+name = "image-generation"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.12.0",
+    "beartype>=0.22.6",
+    "einops>=0.8.1",
+    "ema-pytorch>=0.7.7",
+    "memory-efficient-attention-pytorch>=0.1.6",
+    "pillow>=12.0.0",
+    "sentencepiece>=0.2.1",
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+    "tqdm>=4.67.1",
+    "transformers>=4.57.3",
+    "vector-quantize-pytorch>=1.27.6",
+]
