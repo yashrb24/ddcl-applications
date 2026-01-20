@@ -18,3 +18,5 @@ encoder:
 decoder:
   _target_: models.tokenizer.Decoder
   config: ${..encoder.config}
+scale: 3
+delta: 0.005
