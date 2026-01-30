@@ -20,8 +20,10 @@ from .nets import Encoder, Decoder
 class TokenizerEncoderOutput:
     z: torch.FloatTensor
     z_quantized: torch.FloatTensor
+    z_scaled: torch.FloatTensor
     tokens: torch.LongTensor
-    z_scaled: dict
+    epsilon: torch.FloatTensor
+    delta: torch.FloatTensor
 
 
 class Tokenizer(nn.Module):
@@ -44,6 +46,7 @@ class Tokenizer(nn.Module):
 
         # utils for token_to_message function
         self.multipliers = None
+        self.base = None
 
     def __repr__(self) -> str:
         return "tokenizer"
@@ -58,7 +61,8 @@ class Tokenizer(nn.Module):
     def compute_loss(self, batch: Batch, **kwargs: Any) -> LossWithIntermediateLosses:
         assert self.lpips is not None
         observations = self.preprocess_input(rearrange(batch['observations'], 'b t c h w -> (b t) c h w'))
-        z, z_quantized, reconstructions, z_scaled = self(observations, should_preprocess=False, should_postprocess=False)
+        z, z_quantized, reconstructions, z_scaled = self(observations, should_preprocess=False,
+                                                         should_postprocess=False)
 
         """
         Old: VQ-VAE setup
@@ -104,9 +108,6 @@ class Tokenizer(nn.Module):
         # scale * tanh(d1),scale * tanh(d2),  ...
         # (scale + delta/2)/delta , (- scale - delta2)/delta
 
-
-
-
         """
         New: DDCL setup
         """
@@ -125,7 +126,8 @@ class Tokenizer(nn.Module):
         tokens = self.message_to_token(m)
         tokens = tokens.reshape(*shape[:-3], -1)
 
-        return TokenizerEncoderOutput(z, z_q, tokens, z_scaled)
+        # 2 sets of experiments - sample error at training OR reuse the error in training
+        return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=z_scaled, tokens=tokens, epsilon=epsilon, delta=self.delta)
 
     def decode(self, z_q: torch.Tensor, should_postprocess: bool = False) -> torch.Tensor:
         shape = z_q.shape  # (..., E, h, w)
@@ -155,12 +157,9 @@ class Tokenizer(nn.Module):
         if self.multipliers is None:
             d = message.shape[-1]
             powers = torch.arange(d, device=message.device)
-            self.multipliers = torch.pow(self.scale, powers)
+            self.base = 2 * self.scale + 1
+            self.multipliers = torch.pow(self.base, powers)
 
-        tokens = torch.linalg.vecdot(self.multipliers, message)
+        shifted_message = self.base + message
+        tokens = torch.linalg.vecdot(self.multipliers, shifted_message)
         return tokens
-
-    def token_to_message(self, tokens: torch.Tensor) -> torch.Tensor:
-        tokens = tokens.unsqueeze(-1)
-        messages = ((tokens // self.multipliers) % self.scale).int()
-        return messages
