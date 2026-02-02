@@ -18,8 +18,7 @@ def _make_inference_tokenizer_output(tokens: torch.LongTensor) -> TokenizerEncod
         z_quantized=None,
         z_scaled=None,
         tokens=tokens,
-        epsilon=None,
-        delta=None
+        epsilon=None
     )
 
 

@@ -9,7 +9,6 @@ from dataset import Batch
 from einops import rearrange
 from typing import Any, Tuple
 
-from sympy.abc import delta
 from utils import LossWithIntermediateLosses
 
 from .lpips import LPIPS
@@ -23,7 +22,6 @@ class TokenizerEncoderOutput:
     z_scaled: torch.FloatTensor
     tokens: torch.LongTensor
     epsilon: torch.FloatTensor
-    delta: torch.FloatTensor
 
 
 class Tokenizer(nn.Module):
@@ -38,6 +36,7 @@ class Tokenizer(nn.Module):
         self.decoder = decoder
         self.scale = scale
         self.delta = delta
+        self.num_levels = int(scale / delta)
 
         self.embedding.weight.data.uniform_(-1.0 / vocab_size, 1.0 / vocab_size)
         self.lpips = LPIPS().eval() if with_lpips else None
@@ -46,7 +45,6 @@ class Tokenizer(nn.Module):
 
         # utils for token_to_message function
         self.multipliers = None
-        self.base = None
 
     def __repr__(self) -> str:
         return "tokenizer"
@@ -92,7 +90,7 @@ class Tokenizer(nn.Module):
         x = x.view(-1, *shape[-3:])
         z = self.encoder(x)
         z = self.pre_quant_conv(z)
-        # b, e, h, w = z.shape
+        b, e, h, w = z.shape
         z_flattened = rearrange(z, 'b e h w -> (b h w) e')
 
         """
@@ -120,14 +118,18 @@ class Tokenizer(nn.Module):
 
         error = (z_hat - z_scaled).detach()
         z_q = z_scaled + error
-        # Reshape to original
+        # Reshape back to spatial format
+        z_q = rearrange(z_q, '(b h w) e -> b e h w', b=b, h=h, w=w)
+        z_scaled = rearrange(z_scaled, '(b h w) e -> b e h w', b=b, h=h, w=w)
+        # Reshape to original batch dims
         z = z.reshape(*shape[:-3], *z.shape[1:])
         z_q = z_q.reshape(*shape[:-3], *z_q.shape[1:])
+        z_scaled = z_scaled.reshape(*shape[:-3], *z_scaled.shape[1:])
         tokens = self.message_to_token(m)
         tokens = tokens.reshape(*shape[:-3], -1)
 
         # 2 sets of experiments - sample error at training OR reuse the error in training
-        return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=z_scaled, tokens=tokens, epsilon=epsilon, delta=self.delta)
+        return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=z_scaled, tokens=tokens, epsilon=epsilon)
 
     def decode(self, z_q: torch.Tensor, should_postprocess: bool = False) -> torch.Tensor:
         shape = z_q.shape  # (..., E, h, w)
@@ -157,9 +159,8 @@ class Tokenizer(nn.Module):
         if self.multipliers is None:
             d = message.shape[-1]
             powers = torch.arange(d, device=message.device)
-            self.base = 2 * self.scale + 1
-            self.multipliers = torch.pow(self.base, powers)
+            self.multipliers = torch.pow(2 * self.num_levels + 1, powers)
 
-        shifted_message = self.base + message
+        shifted_message = message + self.num_levels
         tokens = torch.linalg.vecdot(self.multipliers, shifted_message)
         return tokens

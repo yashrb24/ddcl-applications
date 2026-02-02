@@ -38,7 +38,7 @@ class Head(Slicer):
 
 class Embedder(nn.Module):
     def __init__(self, max_blocks: int, act_mask: torch.Tensor, obs_mask: torch.Tensor,
-                 act_embedding_table: nn.Embedding) -> None:
+                 act_embedding_table: nn.Embedding, scale: float, delta: float) -> None:
         super().__init__()
         # we are only passing one embedding table (for action tokens)
         # so we will have one embedding table, but two block masks
@@ -48,10 +48,11 @@ class Embedder(nn.Module):
         self.embedding_dim = act_embedding_table.embedding_dim
         # assert all([e.embedding_dim == self.embedding_dim for e in embedding_tables]) # we have a single embedding table
         self.act_slicer, self.obs_slicer = Slicer(max_blocks, act_mask), Slicer(max_blocks, obs_mask)
+        self.scale = scale
+        self.delta = delta
+        self.num_levels = int(scale / delta)
+        self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
         self.multipliers = None
-        self.base = None
-        self.delta = None
-        self.uniform_dist = None
 
     def forward(self, tokenizer_output: TokenizerEncoderOutput, num_steps: int, prev_steps: int) -> torch.Tensor:
         tokens = tokenizer_output.tokens
@@ -67,10 +68,6 @@ class Embedder(nn.Module):
         obs_tokens = tokens[:, obs_slice]
         m = self.token_to_message(obs_tokens)
 
-        if self.delta is None:
-            self.delta = tokenizer_output.delta
-            self.uniform_dist = torch.distributions.Uniform(-self.delta / 2, self.delta / 2)
-
         epsilon = tokenizer_output.epsilon
         if tokenizer_output.epsilon is None:
             epsilon = self.uniform_dist.sample(m.shape)
@@ -85,10 +82,9 @@ class Embedder(nn.Module):
     def token_to_message(self, tokens: torch.Tensor) -> torch.Tensor:
         if self.multipliers is None:
             powers = torch.arange(self.embedding_dim, device=tokens.device)
-            self.base = 2 * self.scale + 1
-            self.multipliers = torch.pow(self.base, powers)
+            self.multipliers = torch.pow(2 * self.num_levels + 1, powers)
 
         tokens = tokens.unsqueeze(-1)
-        shifted_messages = (tokens // self.multipliers) % self.base.int()
-        messages = shifted_messages - self.base
+        shifted_messages = (tokens // self.multipliers) % (2 * self.num_levels + 1)
+        messages = shifted_messages - self.num_levels
         return messages

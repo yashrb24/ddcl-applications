@@ -23,7 +23,7 @@ class WorldModelOutput:
 
 
 class WorldModel(nn.Module):
-    def __init__(self, obs_vocab_size: int, act_vocab_size: int, config: TransformerConfig) -> None:
+    def __init__(self, obs_vocab_size: int, act_vocab_size: int, config: TransformerConfig, scale: float = 3.0, delta: float = 0.005) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.config = config
@@ -39,8 +39,11 @@ class WorldModel(nn.Module):
 
         self.embedder = Embedder(
             max_blocks=config.max_blocks,
-            block_masks=[act_tokens_pattern, obs_tokens_pattern],
-            embedding_tables=nn.ModuleList([nn.Embedding(act_vocab_size, config.embed_dim)])
+            act_mask=act_tokens_pattern,
+            obs_mask=obs_tokens_pattern,
+            act_embedding_table=nn.Embedding(act_vocab_size, config.embed_dim),
+            scale=scale,
+            delta=delta,
         )
 
         self.head_observations = Head(
@@ -103,12 +106,18 @@ class WorldModel(nn.Module):
         act_tokens = rearrange(batch['actions'], 'b l -> b l 1')
         tokens = rearrange(torch.cat((obs_tokens, act_tokens), dim=2), 'b l k1 -> b (l k1)')  # (B, L(K+1))
 
+        # Reshape epsilon from flat (B*L*h*w, e) to (B, L*K, e) to match embedder's m shape
+        B = obs_tokens.shape[0]
+        epsilon = encoded_observations.epsilon
+        if epsilon is not None:
+            epsilon = epsilon.reshape(B, -1, epsilon.shape[-1])
+
         combined_output = TokenizerEncoderOutput(
             z=encoded_observations.z,
             z_quantized=encoded_observations.z_quantized,
             tokens=tokens,
             z_scaled=encoded_observations.z_scaled,
-            epsilon=encoded_observations.epsilon
+            epsilon=epsilon,
         )
         outputs = self(combined_output)
 
