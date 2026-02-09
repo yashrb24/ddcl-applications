@@ -18,3 +18,5 @@ dependencies = [
     "transformers>=4.57.3",
     "vector-quantize-pytorch>=1.27.6",
 ]
+[tool.setuptools]
+packages = ["image_generation"]

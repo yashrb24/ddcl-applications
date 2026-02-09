@@ -4,7 +4,7 @@ import math
 from math import sqrt
 from functools import partial, wraps
 
-from ddcl_quantizer import DDCL
+from .ddcl_quantizer import DDCL
 from vector_quantize_pytorch import VectorQuantize as VQ, LFQ, FSQ
 
 import torch
@@ -611,11 +611,15 @@ class FSQGanVAE(VQGanVAE):
     def _init__(self, *, levels=[8, 5, 5, 5], **kwargs):
         super().__init__(**kwargs)
         self.lookup_free_quantization = True
-        self.quantizer = FSQ(levels=levels, channel_first=True)
+        self.quantizer = FSQ(levels=levels, channel_first=True, dim=self.enc_dec.encoded_dim, codebook_size=self.codebook_size, return_indices=True)
 
-    def encode(self, fmap):
-        fmap, indices = self.quantizer(fmap)
-        return fmap, indices, 0.0
+    def encode(self, img):
+        fmap = self.enc_dec.encode(img)
+        res = self.quantizer(fmap)
+        fmap = res.quantized
+        indices = res.indices
+        entropy_aux_loss = res.entropy_aux_loss
+        return fmap, indices, entropy_aux_loss
 
 
 class DDCLGanVAE(VQGanVAE):

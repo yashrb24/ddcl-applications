@@ -376,7 +376,7 @@ class VQGanVAETrainer(nn.Module):
 
                 # else save a grid of images
 
-                imgs_and_recons .attend import Atten= torch.stack((valid_data, recons), dim = 0)
+                imgs_and_recons = torch.stack((valid_data, recons), dim = 0)
                 imgs_and_recons = rearrange(imgs_and_recons, 'r b ... -> (b r) ...')
 
                 imgs_and_recons = imgs_and_recons.detach().cpu().float().clamp(0., 1.)
