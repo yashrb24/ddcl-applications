@@ -159,8 +159,8 @@ class Tokenizer(nn.Module):
         if self.multipliers is None:
             d = message.shape[-1]
             powers = torch.arange(d, device=message.device)
-            self.multipliers = torch.pow(2 * self.num_levels + 1, powers)
+            self.multipliers = torch.pow(2 * self.num_levels + 2, powers)
 
-        shifted_message = message + self.num_levels
+        shifted_message = message + self.num_levels + 1
         tokens = torch.linalg.vecdot(self.multipliers, shifted_message)
         return tokens

@@ -82,9 +82,9 @@ class Embedder(nn.Module):
     def token_to_message(self, tokens: torch.Tensor) -> torch.Tensor:
         if self.multipliers is None:
             powers = torch.arange(self.embedding_dim, device=tokens.device)
-            self.multipliers = torch.pow(2 * self.num_levels + 1, powers)
+            self.multipliers = torch.pow(2 * self.num_levels + 2, powers)
 
         tokens = tokens.unsqueeze(-1)
-        shifted_messages = (tokens // self.multipliers) % (2 * self.num_levels + 1)
-        messages = shifted_messages - self.num_levels
+        shifted_messages = (tokens // self.multipliers) % (2 * self.num_levels + 2)
+        messages = shifted_messages - self.num_levels - 1
         return messages
