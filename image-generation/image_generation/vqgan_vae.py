@@ -397,7 +397,8 @@ class VQGanVAE(nn.Module):
             self.quantizer = VQ(
                 dim=self.enc_dec.encoded_dim,
                 codebook_size=codebook_size,
-                accept_image_fmap=True**vq_kwargs,
+                accept_image_fmap=True,
+                **vq_kwargs,
             )
 
         # reconstruction loss
@@ -607,24 +608,120 @@ class VQGanVAE(nn.Module):
 
 
 class FSQGanVAE(VQGanVAE):
+    """VQ-GAN VAE using Finite Scalar Quantization (FSQ).
 
-    def _init__(self, *, levels=[8, 5, 5, 5], **kwargs):
-        super().__init__(**kwargs)
-        self.lookup_free_quantization = True
-        self.quantizer = FSQ(levels=levels, channel_first=True, dim=self.enc_dec.encoded_dim, codebook_size=self.codebook_size, return_indices=True)
+    See: https://arxiv.org/abs/2309.15505
+    """
 
-    def encode(self, img):
-        fmap = self.enc_dec.encode(img)
-        res = self.quantizer(fmap)
-        fmap = res.quantized
-        indices = res.indices
-        entropy_aux_loss = res.entropy_aux_loss
-        return fmap, indices, entropy_aux_loss
+    def __init__(
+        self,
+        *,
+        dim,
+        fsq_levels: list[int] = [8, 6, 5],
+        channels=3,
+        layers=4,
+        l2_recon_loss=False,
+        use_hinge_loss=True,
+        vgg=None,
+        use_vgg_and_gan=True,
+        discr_layers=4,
+        fsq_kwargs: dict = dict(),
+        **kwargs,
+    ):
+        codebook_size = math.prod(fsq_levels)
+
+        super().__init__(
+            dim=dim,
+            channels=channels,
+            layers=layers,
+            l2_recon_loss=l2_recon_loss,
+            use_hinge_loss=use_hinge_loss,
+            vgg=vgg,
+            codebook_size=codebook_size,
+            lookup_free_quantization=False,
+            use_vgg_and_gan=use_vgg_and_gan,
+            discr_layers=discr_layers,
+            **kwargs,
+        )
+
+        self.quantizer = FSQ(
+            levels=fsq_levels, dim=self.enc_dec.encoded_dim, **fsq_kwargs
+        )
+
+        self.fsq_levels = fsq_levels
+        self.codebook_size = codebook_size
+
+    def encode(self, fmap):
+        fmap = self.enc_dec.encode(fmap)
+        fmap, indices = self.quantizer(fmap)
+        return fmap, indices, torch.tensor(0.0, device=fmap.device, requires_grad=False)
+
+    def decode_from_ids(self, ids):
+        fmap = self.quantizer.indices_to_codes(ids)
+        return self.decode(fmap)
 
 
 class DDCLGanVAE(VQGanVAE):
+    """VQ-GAN VAE using DDCL (Differentiable Discrete Communication Learning).
 
-    def __init__(self, *, ddcl_delta=0.1, ddcl_lambda=1.0, **kwargs):
-        super().__init__(**kwargs)
-        self.lookup_free_quantization = False
-        self.quantizer = DDCL(ddcl_delta=ddcl_delta, ddcl_lambda=ddcl_lambda)
+    See: https://arxiv.org/abs/2511.01554
+    """
+
+    def __init__(
+        self,
+        *,
+        dim,
+        n_dims: int = 4,
+        delta: float = 1.0,
+        scale: float = 3.5,
+        ddcl_lambda: float = 1e-3,
+        channels=3,
+        layers=4,
+        l2_recon_loss=False,
+        use_hinge_loss=True,
+        vgg=None,
+        use_vgg_and_gan=True,
+        discr_layers=4,
+        **kwargs,
+    ):
+        ddcl = DDCL(
+            n_dims=n_dims,
+            delta=delta,
+            scale=scale,
+            dim=None,
+            ddcl_lambda=ddcl_lambda,
+        )
+        codebook_size = ddcl.codebook_size
+
+        super().__init__(
+            dim=dim,
+            channels=channels,
+            layers=layers,
+            l2_recon_loss=l2_recon_loss,
+            use_hinge_loss=use_hinge_loss,
+            vgg=vgg,
+            codebook_size=codebook_size,
+            lookup_free_quantization=False,
+            use_vgg_and_gan=use_vgg_and_gan,
+            discr_layers=discr_layers,
+            **kwargs,
+        )
+
+        self.quantizer = DDCL(
+            n_dims=n_dims,
+            delta=delta,
+            scale=scale,
+            dim=self.enc_dec.encoded_dim,
+            ddcl_lambda=ddcl_lambda,
+        )
+        self.codebook_size = codebook_size
+
+    def encode(self, fmap):
+        fmap = self.enc_dec.encode(fmap)
+        fmap, indices, comm_loss = self.quantizer(fmap)
+        return fmap, indices, comm_loss
+
+    @torch.no_grad()
+    def decode_from_ids(self, ids):
+        fmap = self.quantizer.indices_to_codes(ids)
+        return self.decode(fmap)
