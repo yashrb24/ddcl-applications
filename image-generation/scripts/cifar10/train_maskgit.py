@@ -1,18 +1,19 @@
 """
-Stage 2: Train MaskGit transformer on ImageNet 256×256 with a frozen VAE tokenizer.
+Stage 2: Train MaskGit transformer on CIFAR-10 128×128 with a frozen VAE tokenizer.
 
 Works with any Stage 1 tokenizer (VQ / FSQ / DDCL).
+All VAE variants use layers=3 (8× downsampling) → 16×16 latent map (256 tokens).
 
-The MaskGit transformer is class-conditional — ImageNet class names are used as
+The MaskGit transformer is class-conditional — CIFAR-10 class names are used as
 text prompts via T5.  Each image folder should be named after the class
-(standard ImageFolder layout: imagenet/train/n01440764/...).
+(standard ImageFolder layout: cifar10/train/airplane/...).
 
 Usage:
-  accelerate launch scripts/train_maskgit.py \
+  accelerate launch scripts/cifar10/train_maskgit.py \
       --vae_type vq \
-      --vae_path ./results/vae_vq/vae.1000000.ema.pt \
-      --image_folder /path/to/imagenet/train \
-      --results_folder ./results/maskgit_vq
+      --vae_path ./results/vae_vq_cifar/vae.200000.ema.pt \
+      --image_folder /path/to/cifar10/train \
+      --results_folder ./results/maskgit_vq_cifar
 """
 
 import argparse
@@ -52,8 +53,12 @@ def cycle(dl):
 
 
 def build_vae(vae_type: str) -> VQGanVAE:
-    """Instantiate the correct VAE class (weights loaded separately)."""
-    common = dict(dim=256, channels=3, layers=4, use_vgg_and_gan=False)
+    """Instantiate the correct VAE class (weights loaded separately).
+
+    All CIFAR-10 variants use layers=3 (8× downsampling) so that
+    128×128 images produce 16×16 latent maps (256 tokens).
+    """
+    common = dict(dim=256, channels=3, layers=3, use_vgg_and_gan=False)
 
     if vae_type == "vq":
         return VQGanVAE(
@@ -81,15 +86,15 @@ def build_vae(vae_type: str) -> VQGanVAE:
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Train MaskGit (Stage 2)")
+    parser = argparse.ArgumentParser(description="Train MaskGit — CIFAR-10 (Stage 2)")
     parser.add_argument("--vae_type", type=str, required=True, choices=["vq", "fsq", "ddcl"])
     parser.add_argument("--vae_path", type=str, required=True, help="Path to Stage 1 VAE checkpoint")
     parser.add_argument("--image_folder", type=str, required=True)
-    parser.add_argument("--results_folder", type=str, default="./results/maskgit")
-    parser.add_argument("--image_size", type=int, default=256)
+    parser.add_argument("--results_folder", type=str, default="./results/maskgit_cifar")
+    parser.add_argument("--image_size", type=int, default=128)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--grad_accum_every", type=int, default=1)
-    parser.add_argument("--num_train_steps", type=int, default=2_500_000)
+    parser.add_argument("--num_train_steps", type=int, default=500_000)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--save_model_every", type=int, default=10000)
     parser.add_argument("--t5_name", type=str, default="t5-small")
@@ -219,7 +224,7 @@ def main():
                 accelerator.unwrap_model(maskgit).state_dict(),
                 str(ckpt_path),
             )
-            accelerator.print(f"step {step}: saved checkpoint to {ckpt_path}")
+            tqdm.write(f"step {step}: saved checkpoint to {ckpt_path}")
 
     accelerator.print("Training complete.")
 

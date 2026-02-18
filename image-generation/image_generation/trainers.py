@@ -19,6 +19,8 @@ from .vqgan_vae import VQGanVAE
 
 from einops import rearrange
 
+from tqdm.auto import tqdm
+
 from accelerate import Accelerator, DistributedType, DistributedDataParallelKwargs
 
 from ema_pytorch import EMA
@@ -351,7 +353,8 @@ class VQGanVAETrainer(nn.Module):
 
             # log
 
-            self.print(f"{steps}: vae loss: {logs['loss']} - discr loss: {logs['discr_loss']}")
+            if steps % 100 == 0:
+                tqdm.write(f"{steps}: vae loss: {logs['loss']:.4f} - discr loss: {logs['discr_loss']:.4f}")
 
         # update exponential moving averaged generator
 
@@ -408,8 +411,21 @@ class VQGanVAETrainer(nn.Module):
     def train(self, log_fn = noop):
         device = next(self.vae.parameters()).device
 
+        pbar = tqdm(
+            initial = int(self.steps.item()),
+            total = self.num_train_steps,
+            desc = 'vae training',
+            disable = not self.is_main,
+        )
+
         while self.steps < self.num_train_steps:
             logs = self.train_step()
             log_fn(logs)
+            pbar.update(1)
+            pbar.set_postfix(
+                vae_loss = f"{logs.get('loss', 0):.4f}",
+                discr_loss = f"{logs.get('discr_loss', 0):.4f}",
+            )
 
+        pbar.close()
         self.print('training complete')
