@@ -26,9 +26,10 @@ class TokenizerEncoderOutput:
 
 class Tokenizer(nn.Module):
     def __init__(self, vocab_size: int, embed_dim: int, encoder: Encoder, decoder: Decoder, scale: float, delta: float,
-                 with_lpips: bool = True) -> None:
+                 enable_ddcl: bool = True, with_lpips: bool = True) -> None:
         super().__init__()
         self.vocab_size = vocab_size
+        self.enable_ddcl = enable_ddcl
         self.encoder = encoder
         self.pre_quant_conv = torch.nn.Conv2d(encoder.config.z_channels, embed_dim, 1)
         self.embedding = nn.Embedding(vocab_size, embed_dim)
@@ -36,23 +37,25 @@ class Tokenizer(nn.Module):
         self.decoder = decoder
         self.scale = scale
         self.delta = delta
-        self.num_levels = int(scale / delta)
 
         self.embedding.weight.data.uniform_(-1.0 / vocab_size, 1.0 / vocab_size)
         self.lpips = LPIPS().eval() if with_lpips else None
-        self.tanh = nn.Tanh()
-        self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
 
-        # utils for token_to_message function
-        self.multipliers = None
+        if enable_ddcl:
+            self.num_levels = int(scale / delta)
+            self.tanh = nn.Tanh()
+            self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
+            self.multipliers = None
 
     def __repr__(self) -> str:
         return "tokenizer"
 
     def forward(self, x: torch.Tensor, should_preprocess: bool = False, should_postprocess: bool = False):
         outputs = self.encode(x, should_preprocess)
-        # decoder_input = outputs.z + (outputs.z_quantized - outputs.z).detach()
-        decoder_input = outputs.z_quantized
+        if self.enable_ddcl:
+            decoder_input = outputs.z_quantized
+        else:
+            decoder_input = outputs.z + (outputs.z_quantized - outputs.z).detach()
         reconstructions = self.decode(decoder_input, should_postprocess)
         return outputs.z, outputs.z_quantized, reconstructions, outputs.z_scaled
 
@@ -62,20 +65,11 @@ class Tokenizer(nn.Module):
         z, z_quantized, reconstructions, z_scaled = self(observations, should_preprocess=False,
                                                          should_postprocess=False)
 
-        """
-        Old: VQ-VAE setup
-        """
-        # Codebook loss. Notes:
-        # - beta position is different from taming and identical to original VQVAE paper
-        # - VQVAE uses 0.25 by default
-        # beta = 1.0
-        # commitment_loss = (z.detach() - z_quantized).pow(2).mean() + beta * (z - z_quantized.detach()).pow(2).mean()
-
-        """
-        New: DDCL setup
-        """
-        # we don't have a commitment loss for ddcl, but we use this variable as a replacement for our ddcl loss
-        commitment_loss = torch.log2(z_scaled / self.delta + 1).mean()
+        if self.enable_ddcl:
+            commitment_loss = torch.log2(z_scaled / self.delta + 1).mean()
+        else:
+            beta = 1.0
+            commitment_loss = (z.detach() - z_quantized).pow(2).mean() + beta * (z - z_quantized.detach()).pow(2).mean()
 
         reconstruction_loss = torch.abs(observations - reconstructions).mean()
         perceptual_loss = torch.mean(self.lpips(observations, reconstructions))
@@ -93,43 +87,32 @@ class Tokenizer(nn.Module):
         b, e, h, w = z.shape
         z_flattened = rearrange(z, 'b e h w -> (b h w) e')
 
-        """
-        Old: VQ-VAE setup
-        """
-        # dist_to_embeddings = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + torch.sum(self.embedding.weight**2, dim=1) - 2 * torch.matmul(z_flattened, self.embedding.weight.t())
-        # tokens = dist_to_embeddings.argmin(dim=-1)
-        # z_q = rearrange(self.embedding(tokens), '(b h w) e -> b e h w', b=b, e=e, h=h, w=w).contiguous()
-        # tokens = tokens.reshape(*shape[:-3], -1)
+        if self.enable_ddcl:
+            z_scaled = self.scale * self.tanh(z_flattened)
+            epsilon = self.uniform_dist.sample(z_flattened.shape)
+            z_prime = z_scaled + epsilon
+            m = torch.floor(z_prime / self.delta)
+            c_m = (m + 0.5) * self.delta
+            z_hat = c_m - epsilon
 
-        # d1 d2 d3 d4 d5
-        # delta = 20
-        # scale * tanh(d1),scale * tanh(d2),  ...
-        # (scale + delta/2)/delta , (- scale - delta2)/delta
-
-        """
-        New: DDCL setup
-        """
-        z_scaled = self.scale * self.tanh(z_flattened)
-        epsilon = self.uniform_dist.sample(z_flattened.shape)
-        z_prime = z_scaled + epsilon
-        m = torch.floor(z_prime / self.delta)
-        c_m = (m + 0.5) * self.delta
-        z_hat = c_m - epsilon
-
-        error = (z_hat - z_scaled).detach()
-        z_q = z_scaled + error
-        # Reshape back to spatial format
-        z_q = rearrange(z_q, '(b h w) e -> b e h w', b=b, h=h, w=w)
-        z_scaled = rearrange(z_scaled, '(b h w) e -> b e h w', b=b, h=h, w=w)
-        # Reshape to original batch dims
-        z = z.reshape(*shape[:-3], *z.shape[1:])
-        z_q = z_q.reshape(*shape[:-3], *z_q.shape[1:])
-        z_scaled = z_scaled.reshape(*shape[:-3], *z_scaled.shape[1:])
-        tokens = self.message_to_token(m)
-        tokens = tokens.reshape(*shape[:-3], -1)
-
-        # 2 sets of experiments - sample error at training OR reuse the error in training
-        return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=z_scaled, tokens=tokens, epsilon=epsilon)
+            error = (z_hat - z_scaled).detach()
+            z_q = z_scaled + error
+            z_q = rearrange(z_q, '(b h w) e -> b e h w', b=b, h=h, w=w)
+            z_scaled = rearrange(z_scaled, '(b h w) e -> b e h w', b=b, h=h, w=w)
+            z = z.reshape(*shape[:-3], *z.shape[1:])
+            z_q = z_q.reshape(*shape[:-3], *z_q.shape[1:])
+            z_scaled = z_scaled.reshape(*shape[:-3], *z_scaled.shape[1:])
+            tokens = self.message_to_token(m)
+            tokens = tokens.reshape(*shape[:-3], -1)
+            return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=z_scaled, tokens=tokens, epsilon=epsilon)
+        else:
+            dist_to_embeddings = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + torch.sum(self.embedding.weight ** 2, dim=1) - 2 * torch.matmul(z_flattened, self.embedding.weight.t())
+            tokens = dist_to_embeddings.argmin(dim=-1)
+            z_q = rearrange(self.embedding(tokens), '(b h w) e -> b e h w', b=b, e=e, h=h, w=w).contiguous()
+            z = z.reshape(*shape[:-3], *z.shape[1:])
+            z_q = z_q.reshape(*shape[:-3], *z_q.shape[1:])
+            tokens = tokens.reshape(*shape[:-3], -1)
+            return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=None, tokens=tokens, epsilon=None)
 
     def decode(self, z_q: torch.Tensor, should_postprocess: bool = False) -> torch.Tensor:
         shape = z_q.shape  # (..., E, h, w)

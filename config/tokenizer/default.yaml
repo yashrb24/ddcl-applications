@@ -20,3 +20,4 @@ decoder:
   config: ${..encoder.config}
 scale: 3
 delta: 0.005
+enable_ddcl: true

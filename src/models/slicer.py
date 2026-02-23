@@ -38,44 +38,46 @@ class Head(Slicer):
 
 class Embedder(nn.Module):
     def __init__(self, max_blocks: int, act_mask: torch.Tensor, obs_mask: torch.Tensor,
-                 act_embedding_table: nn.Embedding, scale: float, delta: float) -> None:
+                 act_embedding_table: nn.Embedding, enable_ddcl: bool, scale: float = None, delta: float = None,
+                 obs_embedding_table: nn.Embedding = None) -> None:
         super().__init__()
-        # we are only passing one embedding table (for action tokens)
-        # so we will have one embedding table, but two block masks
-        # assert len(block_masks) == len(embedding_tables)
-        assert ((act_mask + obs_mask) == 1).all()  # block mask are a partition of a block
+        assert ((act_mask + obs_mask) == 1).all()
+        self.enable_ddcl = enable_ddcl
         self.act_embedding_table = act_embedding_table
         self.embedding_dim = act_embedding_table.embedding_dim
-        # assert all([e.embedding_dim == self.embedding_dim for e in embedding_tables]) # we have a single embedding table
         self.act_slicer, self.obs_slicer = Slicer(max_blocks, act_mask), Slicer(max_blocks, obs_mask)
-        self.scale = scale
-        self.delta = delta
-        self.num_levels = int(scale / delta)
-        self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
-        self.multipliers = None
+
+        if enable_ddcl:
+            self.scale = scale
+            self.delta = delta
+            self.num_levels = int(scale / delta)
+            self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
+            self.multipliers = None
+        else:
+            self.obs_embedding_table = obs_embedding_table
 
     def forward(self, tokenizer_output: TokenizerEncoderOutput, num_steps: int, prev_steps: int) -> torch.Tensor:
         tokens = tokenizer_output.tokens
         assert tokens.ndim == 2  # x is (B, T)
         output = torch.zeros(*tokens.size(), self.embedding_dim, device=tokens.device)
-        # for slicer, emb in zip(self.slicers, self.embedding_tables):
-        #     s = slicer.compute_slice(num_steps, prev_steps)
-        #     output[:, s] = emb(tokens[:, s])
         act_slice = self.act_slicer.compute_slice(num_steps, prev_steps)
         output[:, act_slice] = self.act_embedding_table(tokens[:, act_slice])
 
         obs_slice = self.obs_slicer.compute_slice(num_steps, prev_steps)
-        obs_tokens = tokens[:, obs_slice]
-        m = self.token_to_message(obs_tokens)
 
-        epsilon = tokenizer_output.epsilon
-        if tokenizer_output.epsilon is None:
-            epsilon = self.uniform_dist.sample(m.shape)
+        if self.enable_ddcl:
+            obs_tokens = tokens[:, obs_slice]
+            m = self.token_to_message(obs_tokens)
 
-        c_m = (m + 0.5) * self.delta
-        z_hat = c_m - epsilon
+            epsilon = tokenizer_output.epsilon
+            if tokenizer_output.epsilon is None:
+                epsilon = self.uniform_dist.sample(m.shape)
 
-        output[:, obs_slice] = z_hat
+            c_m = (m + 0.5) * self.delta
+            z_hat = c_m - epsilon
+            output[:, obs_slice] = z_hat
+        else:
+            output[:, obs_slice] = self.obs_embedding_table(tokens[:, obs_slice])
 
         return output
 

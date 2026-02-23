@@ -23,7 +23,7 @@ class WorldModelOutput:
 
 
 class WorldModel(nn.Module):
-    def __init__(self, obs_vocab_size: int, act_vocab_size: int, config: TransformerConfig, scale: float = 3.0, delta: float = 0.005) -> None:
+    def __init__(self, obs_vocab_size: int, act_vocab_size: int, config: TransformerConfig, enable_ddcl: bool = True, scale: float = 3.0, delta: float = 0.005) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.config = config
@@ -37,13 +37,17 @@ class WorldModel(nn.Module):
 
         self.pos_emb = nn.Embedding(config.max_tokens, config.embed_dim)
 
+        obs_embedding_table = None if enable_ddcl else nn.Embedding(obs_vocab_size, config.embed_dim)
+
         self.embedder = Embedder(
             max_blocks=config.max_blocks,
             act_mask=act_tokens_pattern,
             obs_mask=obs_tokens_pattern,
             act_embedding_table=nn.Embedding(act_vocab_size, config.embed_dim),
+            enable_ddcl=enable_ddcl,
             scale=scale,
             delta=delta,
+            obs_embedding_table=obs_embedding_table,
         )
 
         self.head_observations = Head(
