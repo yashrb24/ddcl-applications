@@ -38,11 +38,13 @@ class Head(Slicer):
 
 class Embedder(nn.Module):
     def __init__(self, max_blocks: int, act_mask: torch.Tensor, obs_mask: torch.Tensor,
-                 act_embedding_table: nn.Embedding, enable_ddcl: bool, scale: float = None, delta: float = None,
+                 act_embedding_table: nn.Embedding, enable_ddcl: bool, enable_fsq: bool = False,
+                 scale: float = None, delta: float = None,
                  obs_embedding_table: nn.Embedding = None) -> None:
         super().__init__()
         assert ((act_mask + obs_mask) == 1).all()
         self.enable_ddcl = enable_ddcl
+        self.enable_fsq = enable_fsq
         self.act_embedding_table = act_embedding_table
         self.embedding_dim = act_embedding_table.embedding_dim
         self.act_slicer, self.obs_slicer = Slicer(max_blocks, act_mask), Slicer(max_blocks, obs_mask)
@@ -54,6 +56,7 @@ class Embedder(nn.Module):
             self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
             self.multipliers = None
         else:
+            # Both VQVAE and FSQ use embedding table lookup
             self.obs_embedding_table = obs_embedding_table
 
     def forward(self, tokenizer_output: TokenizerEncoderOutput, num_steps: int, prev_steps: int) -> torch.Tensor:

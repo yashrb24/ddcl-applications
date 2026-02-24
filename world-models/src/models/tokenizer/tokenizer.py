@@ -2,12 +2,16 @@
 Credits to https://github.com/CompVis/taming-transformers
 """
 
+import math
+
 import torch
 import torch.nn as nn
+import numpy as np
+from vector_quantize_pytorch import FSQ
 from dataclasses import dataclass
 from dataset import Batch
 from einops import rearrange
-from typing import Any, Tuple
+from typing import Any, List, Optional, Tuple
 
 from utils import LossWithIntermediateLosses
 
@@ -26,19 +30,30 @@ class TokenizerEncoderOutput:
 
 class Tokenizer(nn.Module):
     def __init__(self, vocab_size: int, embed_dim: int, encoder: Encoder, decoder: Decoder, scale: float, delta: float,
-                 enable_ddcl: bool = True, with_lpips: bool = True) -> None:
+                 enable_ddcl: bool = True, enable_fsq: bool = False, fsq_levels: Optional[List[int]] = None,
+                 with_lpips: bool = True) -> None:
         super().__init__()
-        self.vocab_size = vocab_size
+        assert not (enable_ddcl and enable_fsq), "enable_ddcl and enable_fsq cannot both be True"
         self.enable_ddcl = enable_ddcl
+        self.enable_fsq = enable_fsq
         self.encoder = encoder
         self.pre_quant_conv = torch.nn.Conv2d(encoder.config.z_channels, embed_dim, 1)
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, decoder.config.z_channels, 1)
         self.decoder = decoder
         self.scale = scale
         self.delta = delta
 
-        self.embedding.weight.data.uniform_(-1.0 / vocab_size, 1.0 / vocab_size)
+        if enable_fsq:
+            self.fsq_levels = fsq_levels if fsq_levels is not None else [8, 8, 8, 8]
+            self.vocab_size = math.prod(self.fsq_levels)
+            self.fsq = FSQ(levels=self.fsq_levels, dim=embed_dim, channel_first=True, return_indices=True)
+            self.embedding = nn.Embedding(self.vocab_size, embed_dim)
+            self.embedding.weight.data.uniform_(-1.0 / self.vocab_size, 1.0 / self.vocab_size)
+        else:
+            self.vocab_size = vocab_size
+            self.embedding = nn.Embedding(vocab_size, embed_dim)
+            self.embedding.weight.data.uniform_(-1.0 / vocab_size, 1.0 / vocab_size)
+
         self.lpips = LPIPS().eval() if with_lpips else None
 
         if enable_ddcl:
@@ -55,6 +70,7 @@ class Tokenizer(nn.Module):
         if self.enable_ddcl:
             decoder_input = outputs.z_quantized
         else:
+            # Straight-through estimator for both VQVAE and FSQ
             decoder_input = outputs.z + (outputs.z_quantized - outputs.z).detach()
         reconstructions = self.decode(decoder_input, should_postprocess)
         return outputs.z, outputs.z_quantized, reconstructions, outputs.z_scaled
@@ -65,7 +81,9 @@ class Tokenizer(nn.Module):
         z, z_quantized, reconstructions, z_scaled = self(observations, should_preprocess=False,
                                                          should_postprocess=False)
 
-        if self.enable_ddcl:
+        if self.enable_fsq:
+            commitment_loss = torch.tensor(0.0, device=z.device)
+        elif self.enable_ddcl:
             commitment_loss = torch.log2(z_scaled / self.delta + 1).mean()
         else:
             beta = 1.0
@@ -87,7 +105,14 @@ class Tokenizer(nn.Module):
         b, e, h, w = z.shape
         z_flattened = rearrange(z, 'b e h w -> (b h w) e')
 
-        if self.enable_ddcl:
+        if self.enable_fsq:
+            z_q, indices = self.fsq(z)  # z is already (b, e, h, w)
+            tokens = indices.reshape(b, -1)
+            z = z.reshape(*shape[:-3], *z.shape[1:])
+            z_q = z_q.reshape(*shape[:-3], *z_q.shape[1:])
+            tokens = tokens.reshape(*shape[:-3], -1)
+            return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=None, tokens=tokens, epsilon=None)
+        elif self.enable_ddcl:
             z_scaled = self.scale * self.tanh(z_flattened)
             epsilon = self.uniform_dist.sample(z_flattened.shape)
             z_prime = z_scaled + epsilon
@@ -147,3 +172,25 @@ class Tokenizer(nn.Module):
         shifted_message = message + self.num_levels + 1
         tokens = torch.linalg.vecdot(self.multipliers, shifted_message)
         return tokens
+
+    def decode_from_tokens(self, tokens: torch.LongTensor) -> torch.Tensor:
+        """Decode observation tokens back to pixel space. Handles VQVAE, DDCL, and FSQ modes.
+
+        Args:
+            tokens: (B, K) token indices where K = h*w
+
+        Returns:
+            Reconstructed observations (B, C, H, W) in [0, 1]
+        """
+        h = int(np.sqrt(tokens.shape[1]))
+
+        if self.enable_fsq:
+            # Reshape to spatial before indices_to_codes so channel_first rearrangement works
+            indices_2d = rearrange(tokens, 'b (h w) -> b h w', h=h)
+            z = self.fsq.indices_to_codes(indices_2d)  # (B, embed_dim, h, w) with channel_first=True
+        else:
+            embedded = self.embedding(tokens)  # (B, K, E)
+            z = rearrange(embedded, 'b (h w) e -> b e h w', h=h)
+
+        rec = self.decode(z, should_postprocess=True)
+        return torch.clamp(rec, 0, 1)

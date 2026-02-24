@@ -21,3 +21,5 @@ decoder:
 scale: 3
 delta: 0.005
 enable_ddcl: true
+enable_fsq: false
+fsq_levels: [8, 8, 8, 8]
