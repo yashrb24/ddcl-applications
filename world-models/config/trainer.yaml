@@ -8,11 +8,11 @@ defaults:
 
 wandb:
   mode: online
-  project: iris
+  project: ddcl-applications
   entity: null
   name: null
   group: null
-  tags: null
+  tags: [world models, iris]
   notes: null
 
 initialization:
