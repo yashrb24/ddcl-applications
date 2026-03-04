@@ -114,7 +114,7 @@ class Tokenizer(nn.Module):
             return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=None, tokens=tokens, epsilon=None)
         elif self.enable_ddcl:
             z_scaled = self.scale * self.tanh(z_flattened)
-            epsilon = self.uniform_dist.sample(z_flattened.shape)
+            epsilon = self.uniform_dist.sample(z_flattened.shape).to(device=z_flattened.device, dtype=z_flattened.dtype)
             z_prime = z_scaled + epsilon
             m = torch.floor(z_prime / self.delta)
             c_m = (m + 0.5) * self.delta
@@ -167,7 +167,7 @@ class Tokenizer(nn.Module):
         if self.multipliers is None:
             d = message.shape[-1]
             powers = torch.arange(d, device=message.device)
-            self.multipliers = torch.pow(2 * self.num_levels + 2, powers)
+            self.multipliers = torch.pow(2 * self.num_levels + 2, powers).float()
 
         shifted_message = message + self.num_levels + 1
         tokens = torch.linalg.vecdot(self.multipliers, shifted_message)

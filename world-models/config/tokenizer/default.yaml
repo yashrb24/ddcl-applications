@@ -20,6 +20,6 @@ decoder:
   config: ${..encoder.config}
 scale: 3
 delta: 0.005
-enable_ddcl: true
-enable_fsq: false
+enable_ddcl: false
+enable_fsq: true
 fsq_levels: [8, 8, 8, 8]

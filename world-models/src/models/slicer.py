@@ -74,7 +74,7 @@ class Embedder(nn.Module):
 
             epsilon = tokenizer_output.epsilon
             if tokenizer_output.epsilon is None:
-                epsilon = self.uniform_dist.sample(m.shape)
+                epsilon = self.uniform_dist.sample(m.shape).to(device=m.device, dtype=m.dtype)
 
             c_m = (m + 0.5) * self.delta
             z_hat = c_m - epsilon
