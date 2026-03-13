@@ -52,7 +52,10 @@ class Embedder(nn.Module):
         if enable_ddcl:
             self.scale = scale
             self.delta = delta
-            self.num_levels = int(scale / delta)
+            half_delta = delta / 2.0
+            self.min_m = math.floor((-scale - half_delta) / delta)
+            max_m = math.floor((scale + half_delta) / delta)
+            self.n_levels = max_m - self.min_m + 1
             self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
             self.multipliers = None
         else:
@@ -87,9 +90,9 @@ class Embedder(nn.Module):
     def token_to_message(self, tokens: torch.Tensor) -> torch.Tensor:
         if self.multipliers is None:
             powers = torch.arange(self.embedding_dim, device=tokens.device)
-            self.multipliers = torch.pow(2 * self.num_levels + 2, powers)
+            self.multipliers = torch.pow(self.n_levels, powers)
 
         tokens = tokens.unsqueeze(-1)
-        shifted_messages = (tokens // self.multipliers) % (2 * self.num_levels + 2)
-        messages = shifted_messages - self.num_levels - 1
+        shifted_messages = (tokens // self.multipliers) % self.n_levels
+        messages = shifted_messages + self.min_m
         return messages

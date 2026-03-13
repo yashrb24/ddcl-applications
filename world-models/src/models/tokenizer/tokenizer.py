@@ -57,7 +57,10 @@ class Tokenizer(nn.Module):
         self.lpips = LPIPS().eval() if with_lpips else None
 
         if enable_ddcl:
-            self.num_levels = int(scale / delta)
+            half_delta = delta / 2.0
+            self.min_m = math.floor((-scale - half_delta) / delta)
+            max_m = math.floor((scale + half_delta) / delta)
+            self.n_levels = max_m - self.min_m + 1
             self.tanh = nn.Tanh()
             self.uniform_dist = torch.distributions.Uniform(-delta / 2, delta / 2)
             self.multipliers = None
@@ -167,9 +170,10 @@ class Tokenizer(nn.Module):
         if self.multipliers is None:
             d = message.shape[-1]
             powers = torch.arange(d, device=message.device)
-            self.multipliers = torch.pow(2 * self.num_levels + 2, powers).float()
+            self.multipliers = torch.pow(self.n_levels, powers).float()
 
-        shifted_message = message + self.num_levels + 1
+        shifted_message = message - self.min_m
+        shifted_message = shifted_message.clamp(0, self.n_levels - 1)
         tokens = torch.linalg.vecdot(self.multipliers, shifted_message)
         return tokens
 
