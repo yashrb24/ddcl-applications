@@ -1,0 +1,11 @@
+program: sweep_train.py
+method: grid
+project: ddcl-applications
+
+parameters:
+  delta:
+    values: [0.001, 0.005, 0.01, 0.05, 0.1]
+  scale:
+    values: [1, 3, 5, 10]
+  seed:
+    values: [0, 1, 2]
