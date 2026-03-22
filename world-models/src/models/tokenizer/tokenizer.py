@@ -134,7 +134,8 @@ class Tokenizer(nn.Module):
             tokens = tokens.reshape(*shape[:-3], -1)
             return TokenizerEncoderOutput(z=z, z_quantized=z_q, z_scaled=z_scaled, tokens=tokens, epsilon=epsilon)
         else:
-            dist_to_embeddings = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + torch.sum(self.embedding.weight ** 2, dim=1) - 2 * torch.matmul(z_flattened, self.embedding.weight.t())
+            dist_to_embeddings = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + torch.sum(
+                self.embedding.weight ** 2, dim=1) - 2 * torch.matmul(z_flattened, self.embedding.weight.t())
             tokens = dist_to_embeddings.argmin(dim=-1)
             z_q = rearrange(self.embedding(tokens), '(b h w) e -> b e h w', b=b, e=e, h=h, w=w).contiguous()
             z = z.reshape(*shape[:-3], *z.shape[1:])
@@ -176,6 +177,64 @@ class Tokenizer(nn.Module):
         shifted_message = shifted_message.clamp(0, self.n_levels - 1)
         tokens = torch.linalg.vecdot(self.multipliers, shifted_message)
         return tokens
+
+    def token_to_message(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Reverse of message_to_token: composite tokens -> per-dim bin indices."""
+        if self.multipliers is None:
+            d = self.embedding.embedding_dim
+            powers = torch.arange(d, device=tokens.device)
+            self.multipliers = torch.pow(self.n_levels, powers).float()
+
+        tokens = tokens.unsqueeze(-1)
+        shifted = (tokens.long() // self.multipliers.long()) % self.n_levels
+        return shifted + self.min_m
+
+    @torch.no_grad()
+    def compute_codebook_metrics(self, all_tokens: torch.Tensor) -> dict:
+        """Compute codebook usage metrics from accumulated tokens across eval dataset.
+
+        Args:
+            all_tokens: (N,) flat tensor of composite token indices.
+
+        Returns:
+            Dict of codebook/* metrics, or {} if not DDCL.
+        """
+        if not self.enable_ddcl:
+            return {}
+
+        embed_dim = self.embedding.embedding_dim
+        total_codes = self.n_levels ** embed_dim
+
+        # Per-dimension bin indices in [0, n_levels-1]
+        m = self.token_to_message(all_tokens)  # (N, embed_dim)
+        shifted = m - self.min_m
+
+        usages = []
+        entropies = []
+        for d in range(embed_dim):
+            bins_d = shifted[:, d]
+            unique_count = bins_d.unique().numel()
+            usages.append(unique_count / self.n_levels)
+
+            counts = torch.bincount(bins_d, minlength=self.n_levels)
+            probs = counts.float() / counts.sum()
+            probs = probs[probs > 0]
+            entropy = -(probs * probs.log2()).sum().item()
+            max_entropy = math.log2(self.n_levels)
+            entropies.append(entropy / max_entropy if max_entropy > 0 else 0.0)
+
+        # Composite token metrics
+        unique_count = all_tokens.unique().numel()
+
+        return {
+            'codebook/unique_codes': unique_count,
+            'codebook/total_codes': total_codes,
+            'codebook/usage_percent': (unique_count / total_codes) * 100,
+            'codebook/per_dim_usage_mean': sum(usages) / len(usages),
+            'codebook/per_dim_usage_min': min(usages),
+            'codebook/per_dim_entropy_mean': sum(entropies) / len(entropies),
+            'codebook/per_dim_entropy_min': min(entropies),
+        }
 
     def decode_from_tokens(self, tokens: torch.LongTensor) -> torch.Tensor:
         """Decode observation tokens back to pixel space. Handles VQVAE, DDCL, and FSQ modes.

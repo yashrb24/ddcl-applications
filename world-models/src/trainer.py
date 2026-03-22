@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 import wandb
+from einops import rearrange
 
 from agent import Agent
 from collector import Collector
@@ -197,7 +198,18 @@ class Trainer:
             batch = self._to_device(self.test_dataset.sample_batch(batch_num_samples=3, sequence_length=self.cfg.common.sequence_length))
             make_reconstructions_from_batch(batch, save_dir=self.reconstructions_dir, epoch=epoch, tokenizer=self.agent.tokenizer)
 
-        return [metrics_tokenizer, metrics_world_model]
+        metrics_codebook = {}
+        if epoch > cfg_tokenizer.start_after_epochs and self.agent.tokenizer.enable_ddcl:
+            all_tokens = []
+            for batch in self.test_dataset.traverse(cfg_tokenizer.batch_num_samples, sequence_length=1):
+                batch = self._to_device(batch)
+                obs = rearrange(batch['observations'], 'b t c h w -> (b t) c h w')
+                tokens = self.agent.tokenizer.encode(obs, should_preprocess=True).tokens
+                all_tokens.append(tokens.reshape(-1))
+            all_tokens = torch.cat(all_tokens)
+            metrics_codebook = self.agent.tokenizer.compute_codebook_metrics(all_tokens)
+
+        return [metrics_tokenizer, metrics_world_model, metrics_codebook]
 
     @torch.no_grad()
     def eval_component(self, component: nn.Module, batch_num_samples: int, sequence_length: int, **kwargs_loss: Any) -> Dict[str, float]:
