@@ -33,6 +33,8 @@ def main():
         f"tokenizer.delta={delta}",
         f"tokenizer.scale={scale}",
         f"training.seed={seed}",
+        "tokenizer.enable_ddcl=true",
+        "tokenizer.enable_fsq=false",
         f"wandb.name=sweep-delta{delta}-scale{scale}-seed{seed}",
         "wandb.tags=[world models, iris, sweep]",
     ]

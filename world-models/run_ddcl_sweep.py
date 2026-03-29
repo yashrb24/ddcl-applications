@@ -4,16 +4,16 @@ Orchestrator for wandb sweep over tokenizer.delta and tokenizer.scale.
 
 Usage:
     # Create sweep and run 1 agent (all 20 grid combos):
-    python run_sweep.py
+    python run_ddcl_sweep.py
 
     # Create sweep only (print ID for multi-agent use):
-    python run_sweep.py --create-only
+    python run_ddcl_sweep.py --create-only
 
     # Join an existing sweep:
-    python run_sweep.py --sweep-id <entity/project/sweep_id>
+    python run_ddcl_sweep.py --sweep-id <entity/project/sweep_id>
 
     # Limit runs per agent:
-    python run_sweep.py --count 5
+    python run_ddcl_sweep.py --count 5
 """
 
 import argparse
@@ -49,7 +49,7 @@ def main():
         sweep_path = args.sweep_id
         print(f"Using existing sweep: {sweep_path}")
     else:
-        with open("sweep_config.yaml", "r") as f:
+        with open("ddcl_sweep_config.yaml", "r") as f:
             sweep_config = yaml.safe_load(f)
 
         sweep_id = wandb.sweep(sweep_config, project=sweep_config.get("project", "ddcl-applications"))
